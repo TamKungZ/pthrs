@@ -6,6 +6,7 @@ pub enum Error {
     Io(io::Error),
     InvalidZip(&'static str),
     InvalidArchive(String),
+    InvalidIndex(String),
     UnsupportedCompression {
         method: u16,
         entry: String,
@@ -20,6 +21,10 @@ pub enum Error {
     },
     InvalidTensor(String),
     TensorNotFound(String),
+    DimensionMismatch {
+        expected: usize,
+        found: usize,
+    },
     TypeMismatch {
         expected: &'static str,
         found: &'static str,
@@ -46,6 +51,7 @@ impl fmt::Display for Error {
             Self::Io(error) => write!(f, "I/O error: {error}"),
             Self::InvalidZip(message) => write!(f, "invalid ZIP archive: {message}"),
             Self::InvalidArchive(message) => write!(f, "invalid PyTorch checkpoint: {message}"),
+            Self::InvalidIndex(message) => write!(f, "invalid FAISS index: {message}"),
             Self::UnsupportedCompression { method, entry } => {
                 write!(
                     f,
@@ -63,6 +69,9 @@ impl fmt::Display for Error {
             }
             Self::InvalidTensor(message) => write!(f, "invalid tensor: {message}"),
             Self::TensorNotFound(name) => write!(f, "tensor not found: {name}"),
+            Self::DimensionMismatch { expected, found } => {
+                write!(f, "dimension mismatch: expected {expected}, found {found}")
+            }
             Self::TypeMismatch { expected, found } => {
                 write!(f, "expected {expected}, found {found}")
             }

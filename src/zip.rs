@@ -215,6 +215,36 @@ impl Archive {
         reader.read_exact(&mut bytes)?;
         Ok(bytes)
     }
+
+    pub fn read_range_into<R: Read + Seek>(
+        &self,
+        reader: &mut R,
+        entry: &Entry,
+        offset: u64,
+        output: &mut [u8],
+    ) -> Result<()> {
+        if entry.method != 0 {
+            return Err(Error::UnsupportedCompression {
+                method: entry.method,
+                entry: entry.name.clone(),
+            });
+        }
+        if entry.compressed_size != entry.uncompressed_size {
+            return Err(Error::InvalidZip(
+                "stored entry has different compressed and uncompressed sizes",
+            ));
+        }
+        let length = output.len() as u64;
+        let end = offset
+            .checked_add(length)
+            .ok_or(Error::InvalidZip("entry range overflow"))?;
+        if end > entry.uncompressed_size {
+            return Err(Error::InvalidZip("entry range lies outside entry data"));
+        }
+        reader.seek(SeekFrom::Start(entry.data_offset + offset))?;
+        reader.read_exact(output)?;
+        Ok(())
+    }
 }
 
 fn local_data_offset<R: Read + Seek>(reader: &mut R, offset: u64, file_len: u64) -> Result<u64> {
