@@ -1,6 +1,6 @@
 # PyTorch `.pth` format notes
 
-These notes record the subset reverse-engineered for PTHrs 0.1.0.
+These notes record the subset reverse-engineered for PTHrs 0.2.0.
 
 ## Container
 

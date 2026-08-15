@@ -1,14 +1,14 @@
 [package]
 name = "pthrs"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.74"
 authors = ["TamKungZ_ <dev@tamkungz.me>"]
-description = "Pure-Rust reader for ZIP-based PyTorch PTH checkpoints"
+description = "Pure-Rust reader for PyTorch PTH checkpoints and FAISS IVF-Flat indexes"
 license = "Apache-2.0"
 readme = "README.md"
 documentation = "https://docs.rs/pthrs"
-keywords = ["pytorch", "checkpoint", "pickle", "parser", "pth"]
+keywords = ["pytorch", "checkpoint", "faiss", "parser", "pth"]
 categories = ["parser-implementations", "multimedia::audio"]
 
 [lib]
@@ -19,6 +19,10 @@ crate-type = ["rlib"]
 [[bin]]
 name = "pthrs-inspect"
 path = "src/bin/pthrs-inspect.rs"
+
+[[bin]]
+name = "pthrs-index-inspect"
+path = "src/bin/pthrs-index-inspect.rs"
 
 [features]
 default = []

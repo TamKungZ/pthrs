@@ -1,85 +1,100 @@
 # PTHrs
 
-A zero-dependency Rust library for reading ZIP-based PyTorch `.pth`
-checkpoint files.
+Pure-Rust readers for ZIP-based PyTorch `.pth` checkpoints and FAISS
+`IndexIVFFlat` files.
 
-PTHrs parses checkpoint metadata and exposes tensor storage without requiring
-Python, PyTorch, libtorch, or CUDA. Tensor data is loaded only when requested.
+The crate has no external dependencies and does not require Python, PyTorch,
+libtorch, FAISS, or CUDA.
 
-## Features
+## Checkpoints
 
-- ZIP and ZIP64 PyTorch checkpoints
+- ZIP and ZIP64 `torch.save` archives
 - Safe pickle parser with no Python code execution
-- Lazy tensor and storage reads
-- Tensor dtype, shape, stride, storage offset, and device metadata
+- Lazy and bulk tensor loading
+- Caller-owned reusable read buffers
+- Tensor dtype, shape, stride, offset, and storage metadata
 - Contiguous and strided tensor views
-- `f16`, `bf16`, `f32`, `f64`, integer, boolean, and complex storage types
-- Conversion of real-valued tensors to `Vec<f32>`
-- Safe Rust with no external dependencies
-
-## Usage
+- Raw, `f16`, `bf16`, `f32`, `f64`, integer, boolean, and complex data
+- Named voice-model config and validation
 
 ```rust
-use pthrs::{PthArchive, Result};
+use pthrs::{PthArchive, Result, TensorReadBuffer};
 
 fn main() -> Result<()> {
     let mut checkpoint = PthArchive::open("model.pth")?;
+    let model = checkpoint.checkpoint().voice_model_info()?;
+    let report = model.validate(checkpoint.checkpoint());
 
-    println!(
-        "tensors: {}",
-        checkpoint.checkpoint().tensor_count()
-    );
+    assert!(report.is_valid(), "{:?}", report.errors);
 
-    if let Some(meta) = checkpoint
-        .checkpoint()
-        .tensor("enc_p.emb_phone.weight")
-    {
-        println!("{:?} {:?}", meta.dtype, meta.shape);
-    }
+    let mut buffer = TensorReadBuffer::new();
+    let tensor = checkpoint.read_tensor_into(
+        "enc_p.emb_phone.weight",
+        &mut buffer,
+    )?;
 
-    let tensor = checkpoint.read_tensor("enc_p.emb_phone.weight")?;
-    let values = tensor.to_f32_vec()?;
-
-    println!("{:?}", &values[..values.len().min(8)]);
+    println!("{:?} {:?}", tensor.meta.dtype, tensor.meta.shape);
     Ok(())
 }
 ```
 
-`PthArchive::from_reader` accepts any `Read + Seek` source:
+Use `load_all_tensors` for original tensor bytes or `load_all_f32` for
+backend-ready `f32` values.
+
+## Retrieval indexes
+
+- FAISS `IndexIVFFlat`
+- L2 and inner-product metrics
+- `IndexFlat` quantizers
+- Full and sparse `ArrayInvertedLists`
+- Lazy file-backed search
+- Fully loaded low-latency search
+- ID reconstruction
+- Reusable search workspaces
+- Inverse-squared-distance retrieval blending
 
 ```rust
-use std::io::Cursor;
-use pthrs::PthArchive;
+use pthrs::{FaissIvfFlatIndex, Result, SearchOptions};
 
-let bytes = std::fs::read("model.pth")?;
-let checkpoint = PthArchive::from_reader(Cursor::new(bytes))?;
+fn main() -> Result<()> {
+    let index = FaissIvfFlatIndex::open("model.index")?.load()?;
+    let mut workspace = index.workspace(8);
+    let query = vec![0.0; index.dimension()];
+    let mut output = vec![0.0; index.dimension()];
 
-println!("{}", checkpoint.checkpoint().tensor_count());
-# Ok::<(), pthrs::Error>(())
+    index.search_and_blend(
+        &query,
+        &mut output,
+        SearchOptions { k: 8, nprobe: 1 },
+        0.75,
+        &mut workspace,
+    )?;
+
+    Ok(())
+}
 ```
+
+Create the loaded index and workspace once during startup. Loaded search does
+not allocate while the requested `k` fits the workspace capacity.
 
 ## CLI
 
 ```bash
-cargo run --release --bin pthrs-inspect -- model.pth
-cargo run --release --bin pthrs-inspect -- model.pth --list
-cargo run --release --bin pthrs-inspect -- model.pth \
-  --tensor enc_p.emb_phone.weight \
-  --values 8
+pthrs-inspect model.pth --validate
+pthrs-inspect model.pth --list
+pthrs-inspect model.pth --tensor enc_p.emb_phone.weight --values 8
+
+pthrs-index-inspect model.index
+pthrs-index-inspect model.index --query-id 0 --k 8 --nprobe 1
 ```
 
-## Supported checkpoint data
+## Current limits
 
-- `data.pkl`
-- `byteorder`
-- `version`
-- `data/<storage-id>`
-- `torch._utils._rebuild_tensor`
-- `torch._utils._rebuild_tensor_v2`
-- `torch._utils._rebuild_parameter`
-
-Compressed ZIP entries, legacy pre-ZIP checkpoints, sparse tensors, quantized
-tensors, and FAISS `.index` files are not currently supported.
+- PyTorch legacy pre-ZIP serialization is not supported.
+- Compressed checkpoint entries are not supported.
+- Sparse and quantized PyTorch tensors are not supported.
+- FAISS support currently targets little-endian 64-bit `IndexIVFFlat` files.
+- Other FAISS index classes are rejected.
 
 ## Development
 
@@ -88,6 +103,10 @@ cargo fmt --all -- --check
 cargo clippy --all-targets -- -D warnings
 cargo test --all-targets
 ```
+
+See [docs/FORMAT.md](docs/FORMAT.md),
+[docs/FAISS_INDEX.md](docs/FAISS_INDEX.md), and
+[docs/RUNTIME.md](docs/RUNTIME.md).
 
 ## License
 
