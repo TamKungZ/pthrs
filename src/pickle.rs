@@ -635,7 +635,7 @@ fn signed_le(bytes: &[u8], offset: usize) -> Result<i64> {
     if bytes.len() > 8 {
         return Err(Error::pickle(offset, "LONG value does not fit i64"));
     }
-    let negative = bytes.last().map_or(false, |value| value & 0x80 != 0);
+    let negative = bytes.last().is_some_and(|value| value & 0x80 != 0);
     let mut full = [if negative { 0xff } else { 0 }; 8];
     full[..bytes.len()].copy_from_slice(bytes);
     Ok(i64::from_le_bytes(full))

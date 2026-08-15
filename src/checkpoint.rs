@@ -550,10 +550,10 @@ fn gather_strided_into(meta: &TensorMeta, source: &[u8], output: &mut [u8]) -> R
 }
 
 fn trim_ascii(mut bytes: &[u8]) -> &[u8] {
-    while bytes.first().map_or(false, u8::is_ascii_whitespace) {
+    while bytes.first().is_some_and(u8::is_ascii_whitespace) {
         bytes = &bytes[1..];
     }
-    while bytes.last().map_or(false, u8::is_ascii_whitespace) {
+    while bytes.last().is_some_and(u8::is_ascii_whitespace) {
         bytes = &bytes[..bytes.len() - 1];
     }
     bytes

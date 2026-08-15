@@ -8,6 +8,7 @@ description = "Pure-Rust reader for PyTorch PTH checkpoints and FAISS IVF-Flat i
 license = "Apache-2.0"
 readme = "README.md"
 documentation = "https://docs.rs/pthrs"
+repository = "https://github.com/TamKungZ/pthrs"
 keywords = ["pytorch", "checkpoint", "faiss", "parser", "pth"]
 categories = ["parser-implementations", "multimedia::audio"]
 
