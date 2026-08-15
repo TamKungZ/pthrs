@@ -115,17 +115,11 @@ output    = retrieved * rate + query * (1 - rate)
 
 ## Verified samples
 
-| File | Dimension | Vectors | Lists | Metric | Layout |
-| --- | ---: | ---: | ---: | --- | --- |
-| Miku `model.index` | 768 | 10,170 | 260 | L2 | `ilar/full` |
-| Solar V3 index | 768 | 48,266 | 1,237 | L2 | `ilar/full` |
-
-Both indexes reconstruct ID 0 and return it as the nearest result with distance
-0 when queried with its own vector.
+See [COMPATIBILITY.md](COMPATIBILITY.md) for the tested index matrix, fixture
+sources, hashes, and search checks.
 
 ## Upstream implementation
 
 - [`faiss/impl/index_write.cpp`](https://github.com/facebookresearch/faiss/blob/main/faiss/impl/index_write.cpp)
 - [`faiss/impl/index_read.cpp`](https://github.com/facebookresearch/faiss/blob/main/faiss/impl/index_read.cpp)
 - [`faiss/impl/io_macros.h`](https://github.com/facebookresearch/faiss/blob/main/faiss/impl/io_macros.h)
-

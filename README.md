@@ -105,8 +105,9 @@ cargo test --all-targets
 ```
 
 See [docs/FORMAT.md](docs/FORMAT.md),
-[docs/FAISS_INDEX.md](docs/FAISS_INDEX.md), and
-[docs/RUNTIME.md](docs/RUNTIME.md).
+[docs/FAISS_INDEX.md](docs/FAISS_INDEX.md),
+[docs/RUNTIME.md](docs/RUNTIME.md), and
+[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
 
 ## License
 
