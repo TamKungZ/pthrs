@@ -1,0 +1,26 @@
+[package]
+name = "pthrs"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+authors = ["TamKungZ_ <dev@tamkungz.me>"]
+description = "Pure-Rust reader for ZIP-based PyTorch PTH checkpoints"
+license = "Apache-2.0"
+readme = "README.md"
+documentation = "https://docs.rs/pthrs"
+keywords = ["pytorch", "checkpoint", "pickle", "parser", "pth"]
+categories = ["parser-implementations", "multimedia::audio"]
+
+[lib]
+name = "pthrs"
+path = "src/lib.rs"
+crate-type = ["rlib"]
+
+[[bin]]
+name = "pthrs-inspect"
+path = "src/bin/pthrs-inspect.rs"
+
+[features]
+default = []
+
+[dependencies]
