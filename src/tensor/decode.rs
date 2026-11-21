@@ -46,8 +46,11 @@ fn element_to_f32(dtype: DType, byte_order: ByteOrder, bytes: &[u8]) -> Result<f
         DType::U8 => bytes[0] as f32,
         DType::I8 => (bytes[0] as i8) as f32,
         DType::I16 => (u16v() as i16) as f32,
+        DType::U16 => u16v() as f32,
         DType::I32 => (u32v() as i32) as f32,
+        DType::U32 => u32v() as f32,
         DType::I64 => (u64v() as i64) as f32,
+        DType::U64 => u64v() as f32,
         DType::F16 => half_to_f32(u16v()),
         DType::BF16 => f32::from_bits((u16v() as u32) << 16),
         DType::F32 => f32::from_bits(u32v()),
@@ -84,7 +87,15 @@ fn half_to_f32(value: u16) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::half_to_f32;
+    use crate::{ByteOrder, DType};
+
+    use super::{decode_f32_into, half_to_f32};
+
+    fn decode(dtype: DType, order: ByteOrder, bytes: &[u8]) -> Vec<f32> {
+        let mut output = Vec::new();
+        decode_f32_into(dtype, order, bytes, &mut output).unwrap();
+        output
+    }
 
     #[test]
     fn decodes_half_precision() {
@@ -92,5 +103,45 @@ mod tests {
         assert_eq!(half_to_f32(0x3c00), 1.0);
         assert_eq!(half_to_f32(0xc000), -2.0);
         assert!(half_to_f32(0x7e00).is_nan());
+    }
+
+    #[test]
+    fn decodes_integer_and_wide_types() {
+        let little = ByteOrder::Little;
+        assert_eq!(
+            decode(DType::U16, little, &65_535u16.to_le_bytes()),
+            [65_535.0]
+        );
+        assert_eq!(decode(DType::I16, little, &(-2i16).to_le_bytes()), [-2.0]);
+        assert_eq!(
+            decode(DType::U32, little, &4_000_000_000u32.to_le_bytes()),
+            [4e9]
+        );
+        assert_eq!(decode(DType::I64, little, &(-7i64).to_le_bytes()), [-7.0]);
+        assert_eq!(
+            decode(DType::U64, little, &(1u64 << 40).to_le_bytes()),
+            [1.0995116e12]
+        );
+        assert_eq!(decode(DType::F64, little, &1.5f64.to_le_bytes()), [1.5]);
+        assert_eq!(decode(DType::BF16, little, &0x3f80u16.to_le_bytes()), [1.0]);
+        assert_eq!(decode(DType::Bool, little, &[0, 1]), [0.0, 1.0]);
+    }
+
+    #[test]
+    fn decodes_big_endian_data() {
+        let big = ByteOrder::Big;
+        assert_eq!(decode(DType::F32, big, &1.25f32.to_be_bytes()), [1.25]);
+        assert_eq!(decode(DType::F16, big, &0x3c00u16.to_be_bytes()), [1.0]);
+        assert_eq!(decode(DType::I32, big, &(-9i32).to_be_bytes()), [-9.0]);
+        assert_eq!(decode(DType::F64, big, &(-0.5f64).to_be_bytes()), [-0.5]);
+    }
+
+    #[test]
+    fn rejects_complex_and_misaligned_data() {
+        let mut output = Vec::new();
+        assert!(
+            decode_f32_into(DType::Complex64, ByteOrder::Little, &[0; 8], &mut output).is_err()
+        );
+        assert!(decode_f32_into(DType::F32, ByteOrder::Little, &[0; 3], &mut output).is_err());
     }
 }
