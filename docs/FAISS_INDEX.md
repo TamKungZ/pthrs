@@ -1,12 +1,10 @@
 # FAISS IVF-Flat index format
 
-PTHrs supports the FAISS `IndexIVFFlat` layout used by the supplied voice
-indexes. FAISS serializes class fields in order and identifies concrete types
-with four-byte codes.
+FAISS serializes class fields in order and identifies concrete types with
+four-byte codes.
 
-The format is native C++ serialization rather than a stable interchange
-standard. The supported files are little-endian, 64-bit builds where `size_t`
-and `idx_t` are eight bytes.
+The format is native C++ serialization. Supported files are little-endian
+64-bit builds.
 
 ## `IndexIVFFlat`
 
@@ -59,8 +57,6 @@ u64    pair_count
 (i64, i64)[] pairs
 ```
 
-The supplied indexes use type 0.
-
 ## Array inverted lists
 
 ```text
@@ -92,34 +88,22 @@ for each list:
     i64[list_size]             ids
 ```
 
-The vector and ID regions are recorded as offsets by the lazy reader. The
-loaded reader decodes them into memory and builds an ID-to-vector lookup.
-
 ## Search
 
-1. Score the query against all centroids.
-2. Select the best `nprobe` lists.
-3. Score vectors inside those lists.
-4. Keep the best `k` results.
+The query is scored against all centroids, the best `nprobe` lists are scanned,
+and the best `k` vectors are kept. L2 distances are squared, matching FAISS;
+inner-product results are similarities where larger is better.
 
-L2 results contain squared Euclidean distance, matching FAISS. Inner-product
-results contain similarity, where larger values are better.
-
-`LoadedIvfFlatIndex::search_and_blend` applies inverse-squared L2 weighting:
+`LoadedIvfFlatIndex::search_and_blend` weights neighbors by inverse squared
+distance:
 
 ```text
-weight[i] = (1 / max(distance[i], epsilon))²
+weight[i] = (1 / max(distance[i], epsilon))^2
 weight    = weight / sum(weight)
 output    = retrieved * rate + query * (1 - rate)
 ```
 
-## Verified samples
-
-See [COMPATIBILITY.md](COMPATIBILITY.md) for the tested index matrix, fixture
-sources, hashes, and search checks.
-
-## Upstream implementation
+## Upstream
 
 - [`faiss/impl/index_write.cpp`](https://github.com/facebookresearch/faiss/blob/main/faiss/impl/index_write.cpp)
 - [`faiss/impl/index_read.cpp`](https://github.com/facebookresearch/faiss/blob/main/faiss/impl/index_read.cpp)
-- [`faiss/impl/io_macros.h`](https://github.com/facebookresearch/faiss/blob/main/faiss/impl/io_macros.h)
