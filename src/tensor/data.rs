@@ -16,6 +16,14 @@ pub struct F32Tensor {
     pub values: Vec<f32>,
 }
 
+impl F32Tensor {
+    /// Splits the tensor into a `usize` shape and its values, the form most
+    /// tensor libraries take to build a tensor from a vector.
+    pub fn into_shape_and_values(self) -> Result<(Vec<usize>, Vec<f32>)> {
+        Ok((self.meta.shape_usize()?, self.values))
+    }
+}
+
 /// Reusable byte buffers for allocation-aware tensor reads.
 #[derive(Debug, Default)]
 pub struct TensorReadBuffer {
