@@ -147,17 +147,7 @@ impl Archive {
         entry: &Entry,
         limit: u64,
     ) -> Result<Vec<u8>> {
-        if entry.method != 0 {
-            return Err(Error::UnsupportedCompression {
-                method: entry.method,
-                entry: entry.name.clone(),
-            });
-        }
-        if entry.compressed_size != entry.uncompressed_size {
-            return Err(Error::InvalidZip(
-                "stored entry has different compressed and uncompressed sizes",
-            ));
-        }
+        require_stored(entry)?;
         if entry.uncompressed_size > limit {
             return Err(Error::LimitExceeded {
                 what: "ZIP entry",
@@ -179,43 +169,6 @@ impl Archive {
         Ok(bytes)
     }
 
-    pub fn read_range<R: Read + Seek>(
-        &self,
-        reader: &mut R,
-        entry: &Entry,
-        offset: u64,
-        length: u64,
-    ) -> Result<Vec<u8>> {
-        if entry.method != 0 {
-            return Err(Error::UnsupportedCompression {
-                method: entry.method,
-                entry: entry.name.clone(),
-            });
-        }
-        if entry.compressed_size != entry.uncompressed_size {
-            return Err(Error::InvalidZip(
-                "stored entry has different compressed and uncompressed sizes",
-            ));
-        }
-        let end = offset
-            .checked_add(length)
-            .ok_or(Error::InvalidZip("entry range overflow"))?;
-        if end > entry.uncompressed_size {
-            return Err(Error::InvalidZip("entry range lies outside entry data"));
-        }
-        let mut bytes = vec![
-            0;
-            usize::try_from(length).map_err(|_| Error::LimitExceeded {
-                what: "read length",
-                value: length,
-                limit: usize::MAX as u64
-            })?
-        ];
-        reader.seek(SeekFrom::Start(entry.data_offset + offset))?;
-        reader.read_exact(&mut bytes)?;
-        Ok(bytes)
-    }
-
     pub fn read_range_into<R: Read + Seek>(
         &self,
         reader: &mut R,
@@ -223,20 +176,9 @@ impl Archive {
         offset: u64,
         output: &mut [u8],
     ) -> Result<()> {
-        if entry.method != 0 {
-            return Err(Error::UnsupportedCompression {
-                method: entry.method,
-                entry: entry.name.clone(),
-            });
-        }
-        if entry.compressed_size != entry.uncompressed_size {
-            return Err(Error::InvalidZip(
-                "stored entry has different compressed and uncompressed sizes",
-            ));
-        }
-        let length = output.len() as u64;
+        require_stored(entry)?;
         let end = offset
-            .checked_add(length)
+            .checked_add(output.len() as u64)
             .ok_or(Error::InvalidZip("entry range overflow"))?;
         if end > entry.uncompressed_size {
             return Err(Error::InvalidZip("entry range lies outside entry data"));
@@ -245,6 +187,21 @@ impl Archive {
         reader.read_exact(output)?;
         Ok(())
     }
+}
+
+fn require_stored(entry: &Entry) -> Result<()> {
+    if entry.method != 0 {
+        return Err(Error::UnsupportedCompression {
+            method: entry.method,
+            entry: entry.name.clone(),
+        });
+    }
+    if entry.compressed_size != entry.uncompressed_size {
+        return Err(Error::InvalidZip(
+            "stored entry has different compressed and uncompressed sizes",
+        ));
+    }
+    Ok(())
 }
 
 fn local_data_offset<R: Read + Seek>(reader: &mut R, offset: u64, file_len: u64) -> Result<u64> {
