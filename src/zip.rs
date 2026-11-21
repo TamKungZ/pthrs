@@ -1,7 +1,9 @@
 use std::io::{Read, Seek, SeekFrom};
 
-use crate::{Error, Result};
+use crate::{inflate::inflate, Error, Result};
 
+const METHOD_STORED: u16 = 0;
+const METHOD_DEFLATE: u16 = 8;
 const EOCD_SIGNATURE: u32 = 0x0605_4b50;
 const ZIP64_LOCATOR_SIGNATURE: u32 = 0x0706_4b50;
 const ZIP64_EOCD_SIGNATURE: u32 = 0x0606_4b50;
@@ -141,13 +143,17 @@ impl Archive {
         self.entries.iter().find(|entry| entry.name == name)
     }
 
+    /// Whether `read_all` and `read_range_into` can decode the entry.
+    pub fn is_supported(entry: &Entry) -> bool {
+        matches!(entry.method, METHOD_STORED | METHOD_DEFLATE)
+    }
+
     pub fn read_all<R: Read + Seek>(
         &self,
         reader: &mut R,
         entry: &Entry,
         limit: u64,
     ) -> Result<Vec<u8>> {
-        require_stored(entry)?;
         if entry.uncompressed_size > limit {
             return Err(Error::LimitExceeded {
                 what: "ZIP entry",
@@ -155,18 +161,31 @@ impl Archive {
                 limit,
             });
         }
-        let mut bytes =
-            vec![
-                0;
-                usize::try_from(entry.uncompressed_size).map_err(|_| Error::LimitExceeded {
-                    what: "ZIP entry",
-                    value: entry.uncompressed_size,
-                    limit: usize::MAX as u64
-                })?
-            ];
-        reader.seek(SeekFrom::Start(entry.data_offset))?;
-        reader.read_exact(&mut bytes)?;
-        Ok(bytes)
+        let uncompressed =
+            usize::try_from(entry.uncompressed_size).map_err(|_| Error::LimitExceeded {
+                what: "ZIP entry",
+                value: entry.uncompressed_size,
+                limit: usize::MAX as u64,
+            })?;
+        match entry.method {
+            METHOD_STORED => {
+                require_same_size(entry)?;
+                let mut bytes = vec![0; uncompressed];
+                reader.seek(SeekFrom::Start(entry.data_offset))?;
+                reader.read_exact(&mut bytes)?;
+                Ok(bytes)
+            }
+            METHOD_DEFLATE => {
+                let mut compressed = vec![0; entry.compressed_size as usize];
+                reader.seek(SeekFrom::Start(entry.data_offset))?;
+                reader.read_exact(&mut compressed)?;
+                inflate(&compressed, uncompressed)
+            }
+            method => Err(Error::UnsupportedCompression {
+                method,
+                entry: entry.name.clone(),
+            }),
+        }
     }
 
     pub fn read_range_into<R: Read + Seek>(
@@ -176,26 +195,31 @@ impl Archive {
         offset: u64,
         output: &mut [u8],
     ) -> Result<()> {
-        require_stored(entry)?;
         let end = offset
             .checked_add(output.len() as u64)
             .ok_or(Error::InvalidZip("entry range overflow"))?;
         if end > entry.uncompressed_size {
             return Err(Error::InvalidZip("entry range lies outside entry data"));
         }
+        if entry.method == METHOD_DEFLATE {
+            let bytes = self.read_all(reader, entry, u64::MAX)?;
+            output.copy_from_slice(&bytes[offset as usize..end as usize]);
+            return Ok(());
+        }
+        if entry.method != METHOD_STORED {
+            return Err(Error::UnsupportedCompression {
+                method: entry.method,
+                entry: entry.name.clone(),
+            });
+        }
+        require_same_size(entry)?;
         reader.seek(SeekFrom::Start(entry.data_offset + offset))?;
         reader.read_exact(output)?;
         Ok(())
     }
 }
 
-fn require_stored(entry: &Entry) -> Result<()> {
-    if entry.method != 0 {
-        return Err(Error::UnsupportedCompression {
-            method: entry.method,
-            entry: entry.name.clone(),
-        });
-    }
+fn require_same_size(entry: &Entry) -> Result<()> {
     if entry.compressed_size != entry.uncompressed_size {
         return Err(Error::InvalidZip(
             "stored entry has different compressed and uncompressed sizes",

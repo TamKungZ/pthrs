@@ -12,6 +12,7 @@ mod buffer;
 mod checkpoint;
 mod error;
 mod faiss;
+mod inflate;
 mod pickle;
 mod tensor;
 mod value;
