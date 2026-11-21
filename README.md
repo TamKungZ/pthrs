@@ -1,5 +1,8 @@
 # PTHrs
 
+[![crates.io](https://img.shields.io/crates/v/pthrs)](https://crates.io/crates/pthrs)
+![Zero dependencies](https://img.shields.io/badge/dependencies-zero-brightgreen)
+
 Pure-Rust readers for PyTorch `.pth` checkpoints and FAISS
 `IndexIVFFlat` files. No dependencies, and no Python, PyTorch, or FAISS needed.
 
