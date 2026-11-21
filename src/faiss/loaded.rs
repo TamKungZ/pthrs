@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use crate::{Error, Result};
 
 use super::search::{
-    insert_neighbor, score_f32, select_lists, sort_neighbors, validate_search, Metric, Neighbor,
-    SearchOptions, SearchWorkspace,
+    insert_hit, score_f32, select_lists, validate_search, Hit, Metric, Neighbor, SearchOptions,
+    SearchWorkspace,
 };
 
 #[derive(Debug)]
@@ -63,7 +63,8 @@ impl LoadedIvfFlatIndex {
 
     /// Replaces every row-major feature frame in `features` with its
     /// retrieval blend and returns the total neighbors used. Allocation-free
-    /// when `workspace` came from [`Self::workspace`].
+    /// when `workspace` came from [`Self::workspace`]. On error, frames before
+    /// the failing one have already been replaced.
     pub fn blend_frames(
         &self,
         features: &mut [f32],
@@ -117,47 +118,46 @@ impl LoadedIvfFlatIndex {
         workspace: &'a mut SearchWorkspace,
     ) -> Result<&'a [Neighbor]> {
         validate_search(query, self.dimension, options)?;
+        let nprobe = options.nprobe.min(self.nlist);
         select_lists(
             query,
             &self.centroids,
             self.dimension,
             self.metric,
-            options.nprobe.min(self.nlist),
+            nprobe,
             &mut workspace.centroid_scores,
         );
-        workspace.neighbors.clear();
-        for &(_, list_index) in workspace
-            .centroid_scores
-            .iter()
-            .take(options.nprobe.min(self.nlist))
-        {
+        workspace.hits.clear();
+        for &(_, list_index) in &workspace.centroid_scores {
             let list = &self.lists[list_index];
-            for (vector_index, &id) in list.ids.iter().enumerate() {
-                let start = vector_index * self.dimension;
-                let score = score_f32(
+            for (slot, &id) in list.ids.iter().enumerate() {
+                let start = slot * self.dimension;
+                let distance = score_f32(
                     query,
                     &list.vectors[start..start + self.dimension],
                     self.metric,
                 );
-                insert_neighbor(
-                    &mut workspace.neighbors,
-                    Neighbor {
-                        id,
-                        distance: score,
+                insert_hit(
+                    &mut workspace.hits,
+                    Hit {
+                        neighbor: Neighbor { id, distance },
+                        list: list_index,
+                        slot,
                     },
                     options.k,
                     self.metric,
                 );
             }
         }
-        sort_neighbors(&mut workspace.neighbors, self.metric);
+        workspace.finish(self.metric);
         Ok(&workspace.neighbors)
     }
 
+    /// Returns the vector stored under `id`. IDs are expected to be unique;
+    /// with duplicates the first stored vector is returned.
     pub fn reconstruct(&self, id: i64) -> Option<&[f32]> {
-        let &(list, vector) = self.locations.get(&id)?;
-        let start = vector.checked_mul(self.dimension)?;
-        self.lists[list].vectors.get(start..start + self.dimension)
+        let &(list, slot) = self.locations.get(&id)?;
+        Some(self.vector(list, slot))
     }
 
     pub fn reconstruct_into(&self, id: i64, output: &mut [f32]) -> Result<()> {
@@ -203,30 +203,29 @@ impl LoadedIvfFlatIndex {
         }
         self.search_into(query, options, workspace)?;
         output.copy_from_slice(query);
-        if workspace.neighbors.is_empty() || rate == 0.0 {
+        if workspace.hits.is_empty() || rate == 0.0 {
             return Ok(0);
         }
 
-        let weight_sum: f64 = workspace
-            .neighbors
-            .iter()
-            .map(|neighbor| {
-                let distance = f64::from(neighbor.distance).max(1e-12);
-                1.0 / (distance * distance)
-            })
-            .sum();
+        let inverse_square = |hit: &Hit| {
+            let distance = f64::from(hit.neighbor.distance).max(1e-12);
+            1.0 / (distance * distance)
+        };
+        let weight_sum: f64 = workspace.hits.iter().map(inverse_square).sum();
         for value in output.iter_mut() {
             *value *= 1.0 - rate;
         }
-        for neighbor in &workspace.neighbors {
-            let distance = f64::from(neighbor.distance).max(1e-12);
-            let weight = ((1.0 / (distance * distance)) / weight_sum) as f32 * rate;
-            if let Some(vector) = self.reconstruct(neighbor.id) {
-                for (output, value) in output.iter_mut().zip(vector) {
-                    *output += value * weight;
-                }
+        for hit in &workspace.hits {
+            let weight = (inverse_square(hit) / weight_sum) as f32 * rate;
+            for (output, value) in output.iter_mut().zip(self.vector(hit.list, hit.slot)) {
+                *output += value * weight;
             }
         }
-        Ok(workspace.neighbors.len())
+        Ok(workspace.hits.len())
+    }
+
+    fn vector(&self, list: usize, slot: usize) -> &[f32] {
+        let start = slot * self.dimension;
+        &self.lists[list].vectors[start..start + self.dimension]
     }
 }

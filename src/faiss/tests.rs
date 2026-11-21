@@ -70,6 +70,10 @@ fn loaded_index_is_send_and_sync() {
 }
 
 fn fixture_index() -> Vec<u8> {
+    fixture_index_with_ids([7, 9])
+}
+
+fn fixture_index_with_ids(ids: [i64; 2]) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(b"IwFl");
     header(&mut out, 2, 2);
@@ -92,8 +96,8 @@ fn fixture_index() -> Vec<u8> {
     f32v(&mut out, 0.0);
     f32v(&mut out, 0.0);
     f32v(&mut out, 2.0);
-    i64v(&mut out, 7);
-    i64v(&mut out, 9);
+    i64v(&mut out, ids[0]);
+    i64v(&mut out, ids[1]);
     out
 }
 
@@ -142,5 +146,52 @@ fn blends_each_frame_like_single_search() {
     assert!(matches!(
         index.blend_frames(&mut [1.0, 2.0, 3.0], options, 0.5, &mut workspace),
         Err(Error::DimensionMismatch { .. })
+    ));
+}
+
+#[test]
+fn blends_the_hit_vector_when_ids_repeat() {
+    let index = FaissIvfFlatIndex::from_reader(Cursor::new(fixture_index_with_ids([7, 7])))
+        .unwrap()
+        .load()
+        .unwrap();
+    let mut workspace = index.workspace(1);
+    let mut output = [0.0; 2];
+
+    index
+        .search_and_blend(
+            &[0.0, 2.0],
+            &mut output,
+            SearchOptions { k: 1, nprobe: 1 },
+            1.0,
+            &mut workspace,
+        )
+        .unwrap();
+
+    assert_eq!(output, [0.0, 2.0]);
+}
+
+#[test]
+fn orders_equal_distances_by_id() {
+    let mut index =
+        FaissIvfFlatIndex::from_reader(Cursor::new(fixture_index_with_ids([9, 7]))).unwrap();
+    let found = index.search(&[0.5, 1.0], 2).unwrap();
+    assert_eq!(found[0].distance, found[1].distance);
+    assert_eq!([found[0].id, found[1].id], [7, 9]);
+}
+
+#[test]
+fn rejects_centroid_block_larger_than_file() {
+    let mut out = Vec::new();
+    out.extend_from_slice(b"IwFl");
+    header(&mut out, 60_000, 0);
+    u64v(&mut out, 1_000);
+    u64v(&mut out, 1);
+    out.extend_from_slice(b"IxF2");
+    header(&mut out, 60_000, 1_000);
+    u64v(&mut out, 60_000_000);
+    assert!(matches!(
+        FaissIvfFlatIndex::from_reader(Cursor::new(out)),
+        Err(Error::InvalidIndex(_))
     ));
 }
