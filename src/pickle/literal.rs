@@ -7,12 +7,26 @@ pub(super) fn pairs(values: Vec<Value>, offset: usize) -> Result<Vec<(Value, Val
     let mut iterator = values.into_iter();
     Ok(std::iter::from_fn(|| Some((iterator.next()?, iterator.next()?))).collect())
 }
-pub(super) fn map_insert(entries: &mut Vec<(Value, Value)>, key: Value, value: Value) {
+const MAX_MAP_ENTRIES: usize = 100_000;
+
+pub(super) fn map_insert(
+    entries: &mut Vec<(Value, Value)>,
+    key: Value,
+    value: Value,
+) -> Result<()> {
     if let Some(entry) = entries.iter_mut().find(|(candidate, _)| candidate == &key) {
         entry.1 = value;
-    } else {
-        entries.push((key, value));
+        return Ok(());
     }
+    if entries.len() >= MAX_MAP_ENTRIES {
+        return Err(Error::LimitExceeded {
+            what: "pickle map entries",
+            value: entries.len() as u64 + 1,
+            limit: MAX_MAP_ENTRIES as u64,
+        });
+    }
+    entries.push((key, value));
+    Ok(())
 }
 pub(super) fn expect_string(value: Value, offset: usize) -> Result<String> {
     match value {
@@ -61,6 +75,17 @@ pub(super) fn parse_quoted(bytes: &[u8], offset: usize) -> Result<String> {
     while at + 1 < bytes.len() {
         if bytes[at] == b'\\' && at + 2 < bytes.len() {
             at += 1;
+            let hex = (bytes[at] == b'x')
+                .then(|| bytes.get(at + 1..at + 3))
+                .flatten()
+                .filter(|_| at + 3 < bytes.len())
+                .and_then(|digits| std::str::from_utf8(digits).ok())
+                .and_then(|digits| u8::from_str_radix(digits, 16).ok());
+            if let Some(value) = hex {
+                out.push(value as char);
+                at += 3;
+                continue;
+            }
             out.push(match bytes[at] {
                 b'n' => '\n',
                 b'r' => '\r',

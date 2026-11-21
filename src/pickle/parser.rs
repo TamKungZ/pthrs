@@ -6,24 +6,16 @@ use super::{
         signed_le, type_error,
     },
     reduce::{persistent, reduce},
+    stack::StackItem,
 };
 
-const MAX_CONTAINER_ITEMS: usize = 2_000_000;
-const MAX_MEMO_ITEMS: usize = 2_000_000;
-const MAX_INLINE_BYTES: u64 = 256 * 1024 * 1024;
-
-#[derive(Clone, Debug)]
-enum StackItem {
-    Mark,
-    Value(Value),
-}
-
 pub(super) struct Parser<'a> {
-    bytes: &'a [u8],
-    at: usize,
-    protocol: u8,
-    stack: Vec<StackItem>,
-    memo: Vec<Option<Value>>,
+    pub(super) bytes: &'a [u8],
+    pub(super) at: usize,
+    pub(super) protocol: u8,
+    pub(super) stack: Vec<StackItem>,
+    pub(super) memo: Vec<Option<Value>>,
+    pub(super) duplicated: u64,
 }
 
 impl<'a> Parser<'a> {
@@ -34,6 +26,7 @@ impl<'a> Parser<'a> {
             protocol: 0,
             stack: Vec::new(),
             memo: Vec::new(),
+            duplicated: 0,
         }
     }
 
@@ -66,14 +59,7 @@ impl<'a> Parser<'a> {
                 b'1' => {
                     self.pop_mark_values(opcode_at)?;
                 }
-                b'2' => {
-                    let value = self
-                        .stack
-                        .last()
-                        .cloned()
-                        .ok_or_else(|| Error::pickle(opcode_at, "DUP on empty stack"))?;
-                    self.push_item(value)?;
-                }
+                b'2' => self.duplicate_top(opcode_at)?,
                 b'N' => self.push(Value::None)?,
                 0x88 => self.push(Value::Bool(true))?,
                 0x89 => self.push(Value::Bool(false))?,
@@ -183,6 +169,7 @@ impl<'a> Parser<'a> {
                 }
                 b'a' => {
                     let value = self.pop_value(opcode_at)?;
+                    self.check_child(&value)?;
                     match self.last_value_mut(opcode_at)? {
                         Value::List(values) => values.push(value),
                         other => return Err(type_error(opcode_at, "list", other.kind())),
@@ -190,6 +177,9 @@ impl<'a> Parser<'a> {
                 }
                 b'e' => {
                     let values = self.pop_mark_values(opcode_at)?;
+                    for value in &values {
+                        self.check_child(value)?;
+                    }
                     match self.last_value_mut(opcode_at)? {
                         Value::List(target) => target.extend(values),
                         other => return Err(type_error(opcode_at, "list", other.kind())),
@@ -218,23 +208,32 @@ impl<'a> Parser<'a> {
                 b'}' => self.push(Value::Map(Vec::new()))?,
                 b'd' => {
                     let values = self.pop_mark_values(opcode_at)?;
-                    let entries = pairs(values, opcode_at)?;
+                    let mut entries = Vec::new();
+                    for (key, value) in pairs(values, opcode_at)? {
+                        map_insert(&mut entries, key, value)?;
+                    }
                     self.push(Value::Map(entries))?;
                 }
                 b's' => {
                     let value = self.pop_value(opcode_at)?;
                     let key = self.pop_value(opcode_at)?;
+                    self.check_child(&key)?;
+                    self.check_child(&value)?;
                     match self.last_value_mut(opcode_at)? {
-                        Value::Map(entries) => map_insert(entries, key, value),
+                        Value::Map(entries) => map_insert(entries, key, value)?,
                         other => return Err(type_error(opcode_at, "map", other.kind())),
                     }
                 }
                 b'u' => {
                     let entries = pairs(self.pop_mark_values(opcode_at)?, opcode_at)?;
+                    for (key, value) in &entries {
+                        self.check_child(key)?;
+                        self.check_child(value)?;
+                    }
                     match self.last_value_mut(opcode_at)? {
                         Value::Map(target) => {
                             for (key, value) in entries {
-                                map_insert(target, key, value);
+                                map_insert(target, key, value)?;
                             }
                         }
                         other => return Err(type_error(opcode_at, "map", other.kind())),
@@ -243,6 +242,9 @@ impl<'a> Parser<'a> {
                 0x8f => self.push(Value::List(Vec::new()))?, // EMPTY_SET, represented as a list
                 0x90 => {
                     let values = self.pop_mark_values(opcode_at)?;
+                    for value in &values {
+                        self.check_child(value)?;
+                    }
                     match self.last_value_mut(opcode_at)? {
                         Value::List(target) => target.extend(values),
                         other => return Err(type_error(opcode_at, "set", other.kind())),
@@ -354,141 +356,5 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-    }
-
-    fn byte(&mut self) -> Result<u8> {
-        let value = *self
-            .bytes
-            .get(self.at)
-            .ok_or_else(|| Error::pickle(self.at, "unexpected end of pickle"))?;
-        self.at += 1;
-        Ok(value)
-    }
-    fn take(&mut self, length: usize) -> Result<&[u8]> {
-        let end = self
-            .at
-            .checked_add(length)
-            .ok_or_else(|| Error::pickle(self.at, "length overflow"))?;
-        let bytes = self
-            .bytes
-            .get(self.at..end)
-            .ok_or_else(|| Error::pickle(self.at, "truncated opcode payload"))?;
-        self.at = end;
-        Ok(bytes)
-    }
-    fn take_len(&mut self, length: u64) -> Result<&[u8]> {
-        if length > MAX_INLINE_BYTES {
-            return Err(Error::LimitExceeded {
-                what: "pickle byte string",
-                value: length,
-                limit: MAX_INLINE_BYTES,
-            });
-        }
-        let length = usize::try_from(length)
-            .map_err(|_| Error::pickle(self.at, "length does not fit this platform"))?;
-        self.take(length)
-    }
-    fn take_u16(&mut self) -> Result<u16> {
-        Ok(u16::from_le_bytes(
-            self.take(2)?.try_into().expect("two bytes"),
-        ))
-    }
-    fn take_u32(&mut self) -> Result<u32> {
-        Ok(u32::from_le_bytes(
-            self.take(4)?.try_into().expect("four bytes"),
-        ))
-    }
-    fn take_i32(&mut self) -> Result<i32> {
-        Ok(i32::from_le_bytes(
-            self.take(4)?.try_into().expect("four bytes"),
-        ))
-    }
-    fn take_u64(&mut self) -> Result<u64> {
-        Ok(u64::from_le_bytes(
-            self.take(8)?.try_into().expect("eight bytes"),
-        ))
-    }
-    fn line(&mut self) -> Result<&[u8]> {
-        let rest = &self.bytes[self.at..];
-        let length = rest
-            .iter()
-            .position(|byte| *byte == b'\n')
-            .ok_or_else(|| Error::pickle(self.at, "unterminated line"))?;
-        let line = &rest[..length];
-        self.at += length + 1;
-        Ok(line)
-    }
-    fn utf8(&mut self, length: u64, offset: usize) -> Result<String> {
-        String::from_utf8(self.take_len(length)?.to_vec())
-            .map_err(|_| Error::pickle(offset, "invalid UTF-8 string"))
-    }
-    fn push(&mut self, value: Value) -> Result<()> {
-        self.push_item(StackItem::Value(value))
-    }
-    fn push_mark(&mut self) -> Result<()> {
-        self.push_item(StackItem::Mark)
-    }
-    fn push_item(&mut self, item: StackItem) -> Result<()> {
-        if self.stack.len() >= MAX_CONTAINER_ITEMS {
-            return Err(Error::LimitExceeded {
-                what: "pickle stack",
-                value: self.stack.len() as u64,
-                limit: MAX_CONTAINER_ITEMS as u64,
-            });
-        }
-        self.stack.push(item);
-        Ok(())
-    }
-    fn pop_value(&mut self, offset: usize) -> Result<Value> {
-        match self.stack.pop() {
-            Some(StackItem::Value(value)) => Ok(value),
-            Some(StackItem::Mark) => Err(Error::pickle(offset, "expected value, found MARK")),
-            None => Err(Error::pickle(offset, "pickle stack underflow")),
-        }
-    }
-    fn pop_mark_values(&mut self, offset: usize) -> Result<Vec<Value>> {
-        let mut values = Vec::new();
-        loop {
-            match self.stack.pop() {
-                Some(StackItem::Value(value)) => values.push(value),
-                Some(StackItem::Mark) => {
-                    values.reverse();
-                    return Ok(values);
-                }
-                None => return Err(Error::pickle(offset, "MARK not found")),
-            }
-        }
-    }
-    fn last_value_mut(&mut self, offset: usize) -> Result<&mut Value> {
-        match self.stack.last_mut() {
-            Some(StackItem::Value(value)) => Ok(value),
-            Some(StackItem::Mark) => Err(Error::pickle(offset, "expected container, found MARK")),
-            None => Err(Error::pickle(offset, "pickle stack underflow")),
-        }
-    }
-    fn memo_put(&mut self, index: usize, offset: usize) -> Result<()> {
-        if index >= MAX_MEMO_ITEMS {
-            return Err(Error::LimitExceeded {
-                what: "pickle memo index",
-                value: index as u64,
-                limit: MAX_MEMO_ITEMS as u64,
-            });
-        }
-        let value = match self.stack.last() {
-            Some(StackItem::Value(value)) => value.clone(),
-            _ => return Err(Error::pickle(offset, "memo write requires a value")),
-        };
-        if self.memo.len() <= index {
-            self.memo.resize(index + 1, None);
-        }
-        self.memo[index] = Some(value);
-        Ok(())
-    }
-    fn memo_get(&mut self, index: usize, offset: usize) -> Result<()> {
-        let value =
-            self.memo.get(index).and_then(Clone::clone).ok_or_else(|| {
-                Error::pickle(offset, format!("memo entry {index} does not exist"))
-            })?;
-        self.push(value)
     }
 }

@@ -1,6 +1,8 @@
+mod input;
 mod literal;
 mod parser;
 mod reduce;
+mod stack;
 
 use crate::{Result, Value};
 

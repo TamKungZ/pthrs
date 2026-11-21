@@ -41,3 +41,43 @@ fn keeps_unknown_classes_inert() {
     );
     assert!(matches!(value.get("old"), Some(Value::Reduce { .. })));
 }
+
+#[test]
+fn fills_ordered_dict_from_item_list() {
+    let pickle = b"\x80\x02ccollections\nOrderedDict\n]X\x01\x00\x00\x00aK\x01\x86a\x85R.";
+    let value = parse_pickle(pickle).unwrap();
+    assert_eq!(value.get("a").and_then(Value::as_i64), Some(1));
+    assert_eq!(value.as_map().unwrap().len(), 1);
+}
+
+#[test]
+fn decodes_hex_escapes_in_protocol_zero_strings() {
+    let value = parse_pickle(
+        br"S'a\x41\n'
+.",
+    )
+    .unwrap();
+    assert_eq!(value.as_str(), Some("aA\n"));
+}
+
+#[test]
+fn rejects_deeply_nested_values() {
+    let mut pickle = vec![0x80, 0x02, b')'];
+    pickle.extend(std::iter::repeat(0x85).take(1000));
+    pickle.push(b'.');
+    assert!(matches!(
+        parse_pickle(&pickle),
+        Err(crate::Error::LimitExceeded { .. })
+    ));
+}
+
+#[test]
+fn rejects_exponential_duplication() {
+    let mut pickle = vec![0x80, 0x02, b'}', b'q', 0];
+    for _ in 0..40 {
+        pickle.extend_from_slice(b"h\x00\x86");
+        pickle.extend_from_slice(b"q\x00");
+    }
+    pickle.push(b'.');
+    assert!(parse_pickle(&pickle).is_err());
+}
