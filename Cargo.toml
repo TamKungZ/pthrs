@@ -12,20 +12,5 @@ repository = "https://github.com/TamKungZ/pthrs"
 keywords = ["pytorch", "checkpoint", "faiss", "parser", "pth"]
 categories = ["parser-implementations", "multimedia::audio"]
 
-[lib]
-name = "pthrs"
-path = "src/lib.rs"
-crate-type = ["rlib"]
-
-[[bin]]
-name = "pthrs-inspect"
-path = "src/bin/pthrs-inspect.rs"
-
-[[bin]]
-name = "pthrs-index-inspect"
-path = "src/bin/pthrs-index-inspect.rs"
-
-[features]
-default = []
-
 [dependencies]
+
