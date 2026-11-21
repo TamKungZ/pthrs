@@ -96,7 +96,7 @@ impl VoiceModelInfo {
             .get("config")
             .ok_or_else(|| Error::InvalidArchive("voice model config is missing".into()))?;
         let values = config_value
-            .as_list()
+            .as_sequence()
             .ok_or_else(|| Error::InvalidArchive("voice model config is not a list".into()))?;
         if values.len() < 18 {
             return Err(Error::InvalidArchive(format!(
@@ -134,10 +134,7 @@ impl VoiceModelInfo {
                 .get("version")
                 .and_then(Value::as_str)
                 .map(str::to_owned),
-            sample_rate_label: checkpoint
-                .get("sr")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
+            sample_rate_label: checkpoint.get("sr").and_then(sample_rate_label),
             pitch_guidance: checkpoint.get("f0").map(truthy).unwrap_or(false),
             training_info: checkpoint
                 .get("info")
@@ -279,16 +276,24 @@ fn string(value: &Value, field: &str) -> Result<String> {
 
 fn uint_list(value: &Value, field: &str) -> Result<Vec<u32>> {
     let values = value
-        .as_list()
+        .as_sequence()
         .ok_or_else(|| Error::InvalidArchive(format!("{field} is not a list")))?;
     values.iter().map(|value| uint(value, field)).collect()
 }
 
 fn nested_uint_list(value: &Value, field: &str) -> Result<Vec<Vec<u32>>> {
     let values = value
-        .as_list()
+        .as_sequence()
         .ok_or_else(|| Error::InvalidArchive(format!("{field} is not a list")))?;
     values.iter().map(|value| uint_list(value, field)).collect()
+}
+
+fn sample_rate_label(value: &Value) -> Option<String> {
+    match value {
+        Value::String(label) => Some(label.clone()),
+        Value::Int(rate) => Some(rate.to_string()),
+        _ => None,
+    }
 }
 
 fn truthy(value: &Value) -> bool {
