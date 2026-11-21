@@ -6,13 +6,11 @@ use std::{
 };
 
 use crate::{
-    zip, ByteOrder, Error, F32Tensor, Result, TensorData, TensorMeta, TensorReadBuffer, TensorView,
+    buffer::resize_zeroed, zip, ByteOrder, Error, F32Tensor, Result, TensorData, TensorMeta,
+    TensorReadBuffer, TensorView,
 };
 
-use super::{
-    metadata::Checkpoint,
-    strided::{gather_strided, gather_strided_into},
-};
+use super::{metadata::Checkpoint, strided::gather_strided_into};
 
 const MAX_DATA_PICKLE: u64 = 64 * 1024 * 1024;
 const MAX_AUXILIARY_ENTRY: u64 = 1024 * 1024;
@@ -106,51 +104,9 @@ impl<R: Read + Seek> PthArchive<R> {
     }
 
     pub fn read_tensor(&mut self, name: &str) -> Result<TensorData> {
-        let meta = self
-            .checkpoint
-            .tensor(name)
-            .cloned()
-            .ok_or_else(|| Error::TensorNotFound(name.to_owned()))?;
-        let element_size = meta.dtype.element_size() as u64;
-        let element_count = meta.element_count()?;
-        let output_bytes = element_count
-            .checked_mul(element_size)
-            .ok_or_else(|| Error::InvalidTensor("tensor byte length overflow".into()))?;
-        if output_bytes > usize::MAX as u64 {
-            return Err(Error::LimitExceeded {
-                what: "tensor byte length",
-                value: output_bytes,
-                limit: usize::MAX as u64,
-            });
-        }
-        if element_count == 0 {
-            return Ok(TensorData {
-                meta,
-                bytes: Vec::new(),
-                byte_order: self.byte_order,
-            });
-        }
-        let entry_name = self.storage_entry_name(&meta.storage.key);
-        let entry = self.zip.find(&entry_name).cloned().ok_or_else(|| {
-            Error::InvalidArchive(format!("storage {} is missing", meta.storage.key))
-        })?;
-        let byte_offset = meta
-            .storage_offset
-            .checked_mul(element_size)
-            .ok_or_else(|| Error::InvalidTensor("storage byte offset overflow".into()))?;
-        let bytes = if meta.is_contiguous() {
-            self.zip
-                .read_range(&mut self.reader, &entry, byte_offset, output_bytes)?
-        } else {
-            let span_elements = meta.storage_span_elements()?;
-            let span_bytes = span_elements
-                .checked_mul(element_size)
-                .ok_or_else(|| Error::InvalidTensor("tensor storage span overflow".into()))?;
-            let source = self
-                .zip
-                .read_range(&mut self.reader, &entry, byte_offset, span_bytes)?;
-            gather_strided(&meta, &source)?
-        };
+        let meta = self.tensor_meta(name)?;
+        let mut bytes = Vec::new();
+        self.read_tensor_bytes(&meta, &mut bytes, &mut Vec::new())?;
         Ok(TensorData {
             meta,
             bytes,
@@ -164,65 +120,56 @@ impl<R: Read + Seek> PthArchive<R> {
         name: &str,
         buffer: &'a mut TensorReadBuffer,
     ) -> Result<TensorView<'a>> {
-        let meta = self
-            .checkpoint
-            .tensor(name)
-            .cloned()
-            .ok_or_else(|| Error::TensorNotFound(name.to_owned()))?;
-        let element_size = meta.dtype.element_size() as u64;
-        let element_count = meta.element_count()?;
-        let output_bytes = element_count
-            .checked_mul(element_size)
-            .ok_or_else(|| Error::InvalidTensor("tensor byte length overflow".into()))?;
-        let output_len = usize::try_from(output_bytes).map_err(|_| Error::LimitExceeded {
-            what: "tensor byte length",
-            value: output_bytes,
-            limit: usize::MAX as u64,
-        })?;
-        buffer.bytes.clear();
-        buffer.bytes.resize(output_len, 0);
-        if element_count != 0 {
-            let entry_name = self.storage_entry_name(&meta.storage.key);
-            let entry = self.zip.find(&entry_name).cloned().ok_or_else(|| {
-                Error::InvalidArchive(format!("storage {} is missing", meta.storage.key))
-            })?;
-            let byte_offset = meta
-                .storage_offset
-                .checked_mul(element_size)
-                .ok_or_else(|| Error::InvalidTensor("storage byte offset overflow".into()))?;
-            if meta.is_contiguous() {
-                self.zip.read_range_into(
-                    &mut self.reader,
-                    &entry,
-                    byte_offset,
-                    &mut buffer.bytes,
-                )?;
-            } else {
-                let span_elements = meta.storage_span_elements()?;
-                let span_bytes = span_elements
-                    .checked_mul(element_size)
-                    .ok_or_else(|| Error::InvalidTensor("tensor storage span overflow".into()))?;
-                let span_len = usize::try_from(span_bytes).map_err(|_| Error::LimitExceeded {
-                    what: "tensor storage span",
-                    value: span_bytes,
-                    limit: usize::MAX as u64,
-                })?;
-                buffer.scratch.clear();
-                buffer.scratch.resize(span_len, 0);
-                self.zip.read_range_into(
-                    &mut self.reader,
-                    &entry,
-                    byte_offset,
-                    &mut buffer.scratch,
-                )?;
-                gather_strided_into(&meta, &buffer.scratch, &mut buffer.bytes)?;
-            }
-        }
+        let meta = self.tensor_meta(name)?;
+        self.read_tensor_bytes(&meta, &mut buffer.bytes, &mut buffer.scratch)?;
         Ok(TensorView {
             meta,
             bytes: &buffer.bytes,
             byte_order: self.byte_order,
         })
+    }
+
+    fn tensor_meta(&self, name: &str) -> Result<TensorMeta> {
+        self.checkpoint
+            .tensor(name)
+            .cloned()
+            .ok_or_else(|| Error::TensorNotFound(name.to_owned()))
+    }
+
+    /// Fills `bytes` with the tensor in contiguous row-major order. `scratch`
+    /// holds the enclosing storage span of a strided view.
+    fn read_tensor_bytes(
+        &mut self,
+        meta: &TensorMeta,
+        bytes: &mut Vec<u8>,
+        scratch: &mut Vec<u8>,
+    ) -> Result<()> {
+        let element_size = meta.dtype.element_size() as u64;
+        resize_zeroed(bytes, to_usize(meta.byte_len()?, "tensor byte length")?)?;
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        let entry_name = self.storage_entry_name(&meta.storage.key);
+        let entry = self.zip.find(&entry_name).cloned().ok_or_else(|| {
+            Error::InvalidArchive(format!("storage {} is missing", meta.storage.key))
+        })?;
+        let byte_offset = meta
+            .storage_offset
+            .checked_mul(element_size)
+            .ok_or_else(|| Error::InvalidTensor("storage byte offset overflow".into()))?;
+        if meta.is_contiguous() {
+            return self
+                .zip
+                .read_range_into(&mut self.reader, &entry, byte_offset, bytes);
+        }
+        let span_bytes = meta
+            .storage_span_elements()?
+            .checked_mul(element_size)
+            .ok_or_else(|| Error::InvalidTensor("tensor storage span overflow".into()))?;
+        resize_zeroed(scratch, to_usize(span_bytes, "tensor storage span")?)?;
+        self.zip
+            .read_range_into(&mut self.reader, &entry, byte_offset, scratch)?;
+        gather_strided_into(meta, scratch, bytes)
     }
 
     pub fn read_tensor_f32(&mut self, name: &str) -> Result<F32Tensor> {
@@ -349,4 +296,12 @@ fn trim_ascii(mut bytes: &[u8]) -> &[u8] {
         bytes = &bytes[..bytes.len() - 1];
     }
     bytes
+}
+
+fn to_usize(value: u64, what: &'static str) -> Result<usize> {
+    usize::try_from(value).map_err(|_| Error::LimitExceeded {
+        what,
+        value,
+        limit: usize::MAX as u64,
+    })
 }

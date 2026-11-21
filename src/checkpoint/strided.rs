@@ -1,11 +1,5 @@
 use crate::{Error, Result, TensorMeta};
 
-pub(super) fn gather_strided(meta: &TensorMeta, source: &[u8]) -> Result<Vec<u8>> {
-    let mut output = vec![0; output_len(meta)?];
-    gather_strided_into(meta, source, &mut output)?;
-    Ok(output)
-}
-
 pub(super) fn gather_strided_into(
     meta: &TensorMeta,
     source: &[u8],
@@ -82,14 +76,15 @@ mod tests {
     #[test]
     fn gathers_transposed_view() {
         let meta = transposed_2x3();
-        let gathered = gather_strided(&meta, &[0, 1, 2, 3, 4, 5]).unwrap();
+        let mut gathered = [0; 6];
+        gather_strided_into(&meta, &[0, 1, 2, 3, 4, 5], &mut gathered).unwrap();
         assert_eq!(gathered, [0, 3, 1, 4, 2, 5]);
     }
 
     #[test]
     fn rejects_short_source_and_wrong_output() {
         let meta = transposed_2x3();
-        assert!(gather_strided(&meta, &[0, 1, 2]).is_err());
+        assert!(gather_strided_into(&meta, &[0, 1, 2], &mut [0; 6]).is_err());
         assert!(gather_strided_into(&meta, &[0; 6], &mut [0; 5]).is_err());
     }
 }

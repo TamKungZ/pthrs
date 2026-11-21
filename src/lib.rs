@@ -8,6 +8,7 @@
 
 #![forbid(unsafe_code)]
 
+mod buffer;
 mod checkpoint;
 mod error;
 mod faiss;

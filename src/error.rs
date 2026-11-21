@@ -2,6 +2,7 @@ use std::{fmt, io};
 
 /// Error returned by PTHrs.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     Io(io::Error),
     InvalidZip(&'static str),
@@ -33,6 +34,9 @@ pub enum Error {
         what: &'static str,
         value: u64,
         limit: u64,
+    },
+    Allocation {
+        bytes: u64,
     },
 }
 
@@ -75,6 +79,7 @@ impl fmt::Display for Error {
             Self::TypeMismatch { expected, found } => {
                 write!(f, "expected {expected}, found {found}")
             }
+            Self::Allocation { bytes } => write!(f, "cannot allocate {bytes} bytes"),
             Self::LimitExceeded { what, value, limit } => {
                 write!(
                     f,
