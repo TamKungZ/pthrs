@@ -3,172 +3,19 @@ use std::{
     fs::File,
     io::{Read, Seek},
     path::Path,
-    slice,
 };
 
 use crate::{
-    pickle::parse_pickle_with_protocol, zip, ByteOrder, Error, F32Tensor, Result, TensorData,
-    TensorMeta, TensorReadBuffer, TensorView, Value,
+    zip, ByteOrder, Error, F32Tensor, Result, TensorData, TensorMeta, TensorReadBuffer, TensorView,
+};
+
+use super::{
+    metadata::Checkpoint,
+    strided::{gather_strided, gather_strided_into},
 };
 
 const MAX_DATA_PICKLE: u64 = 64 * 1024 * 1024;
 const MAX_AUXILIARY_ENTRY: u64 = 1024 * 1024;
-
-/// Parsed, inert metadata from a PyTorch checkpoint.
-#[derive(Clone, Debug)]
-pub struct Checkpoint {
-    protocol: u8,
-    root: Value,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct CheckpointSummary {
-    pub tensor_count: usize,
-    pub storage_count: usize,
-    pub tensor_elements: u64,
-    pub logical_tensor_bytes: u64,
-    pub storage_bytes: u64,
-}
-
-impl Checkpoint {
-    pub fn from_pickle(bytes: &[u8]) -> Result<Self> {
-        let (protocol, root) = parse_pickle_with_protocol(bytes)?;
-        Ok(Self { protocol, root })
-    }
-
-    pub fn pickle_protocol(&self) -> u8 {
-        self.protocol
-    }
-    pub fn root(&self) -> &Value {
-        &self.root
-    }
-
-    pub fn into_root(self) -> Value {
-        self.root
-    }
-    pub fn get(&self, key: &str) -> Option<&Value> {
-        self.root.get(key)
-    }
-
-    /// Iterates top-level checkpoint metadata, excluding the potentially large
-    /// `weight` dictionary.
-    pub fn metadata(&self) -> MetadataIter<'_> {
-        MetadataIter {
-            inner: self.root.as_map().unwrap_or(&[]).iter(),
-            state_dict_key: self.state_dict_key(),
-        }
-    }
-
-    /// Returns a conventional `weight`, `state_dict`, or `model` dictionary.
-    /// A root dictionary containing tensors directly is also accepted.
-    pub fn state_dict(&self) -> Option<&Value> {
-        if let Some(key) = self.state_dict_key() {
-            return self.root.get(key);
-        }
-        map_contains_tensor(&self.root).then_some(&self.root)
-    }
-
-    /// Iterates tensors in the detected state dictionary.
-    pub fn tensors(&self) -> TensorIter<'_> {
-        let entries = self.state_dict().and_then(Value::as_map).unwrap_or(&[]);
-        TensorIter {
-            inner: entries.iter(),
-        }
-    }
-
-    pub fn tensor(&self, name: &str) -> Option<&TensorMeta> {
-        self.tensors()
-            .find_map(|(candidate, tensor)| (candidate == name).then_some(tensor))
-    }
-
-    pub fn tensor_count(&self) -> usize {
-        self.tensors().count()
-    }
-
-    pub fn tensor_names(&self) -> impl Iterator<Item = &str> {
-        self.tensors().map(|(name, _)| name)
-    }
-
-    pub fn summary(&self) -> Result<CheckpointSummary> {
-        let mut summary = CheckpointSummary::default();
-        let mut storages = BTreeMap::new();
-        for (_, tensor) in self.tensors() {
-            summary.tensor_count += 1;
-            let elements = tensor.element_count()?;
-            summary.tensor_elements = summary
-                .tensor_elements
-                .checked_add(elements)
-                .ok_or_else(|| Error::InvalidTensor("tensor element total overflow".into()))?;
-            let bytes = elements
-                .checked_mul(tensor.dtype.element_size() as u64)
-                .ok_or_else(|| Error::InvalidTensor("tensor byte total overflow".into()))?;
-            summary.logical_tensor_bytes = summary
-                .logical_tensor_bytes
-                .checked_add(bytes)
-                .ok_or_else(|| Error::InvalidTensor("tensor byte total overflow".into()))?;
-            storages
-                .entry(&tensor.storage.key)
-                .or_insert(&tensor.storage);
-        }
-        summary.storage_count = storages.len();
-        for storage in storages.values() {
-            let bytes = storage
-                .elements
-                .checked_mul(storage.dtype.element_size() as u64)
-                .ok_or_else(|| Error::InvalidTensor("storage byte total overflow".into()))?;
-            summary.storage_bytes = summary
-                .storage_bytes
-                .checked_add(bytes)
-                .ok_or_else(|| Error::InvalidTensor("storage byte total overflow".into()))?;
-        }
-        Ok(summary)
-    }
-
-    fn state_dict_key(&self) -> Option<&str> {
-        ["weight", "state_dict", "model"]
-            .into_iter()
-            .find(|key| self.root.get(key).map(map_contains_tensor).unwrap_or(false))
-    }
-}
-
-pub struct MetadataIter<'a> {
-    inner: slice::Iter<'a, (Value, Value)>,
-    state_dict_key: Option<&'a str>,
-}
-impl<'a> Iterator for MetadataIter<'a> {
-    type Item = (&'a str, &'a Value);
-    fn next(&mut self) -> Option<Self::Item> {
-        self.inner.find_map(|(key, value)| {
-            let key = key.as_str()?;
-            (Some(key) != self.state_dict_key).then_some((key, value))
-        })
-    }
-}
-
-fn map_contains_tensor(value: &Value) -> bool {
-    value
-        .as_map()
-        .map(|entries| {
-            entries
-                .iter()
-                .any(|(_, value)| matches!(value, Value::Tensor(_)))
-        })
-        .unwrap_or(false)
-}
-
-pub struct TensorIter<'a> {
-    inner: slice::Iter<'a, (Value, Value)>,
-}
-impl<'a> Iterator for TensorIter<'a> {
-    type Item = (&'a str, &'a TensorMeta);
-    fn next(&mut self) -> Option<Self::Item> {
-        self.inner
-            .find_map(|(key, value)| match (key.as_str(), value) {
-                (Some(key), Value::Tensor(tensor)) => Some((key, tensor)),
-                _ => None,
-            })
-    }
-}
 
 /// A lazy reader over a ZIP-based PyTorch `.pth` checkpoint.
 ///
@@ -468,85 +315,6 @@ impl<R: Read + Seek> PthArchive<R> {
         }
         Ok(())
     }
-}
-
-fn gather_strided(meta: &TensorMeta, source: &[u8]) -> Result<Vec<u8>> {
-    let width = meta.dtype.element_size();
-    let count = usize::try_from(meta.element_count()?)
-        .map_err(|_| Error::InvalidTensor("element count does not fit this platform".into()))?;
-    let output_len = count
-        .checked_mul(width)
-        .ok_or_else(|| Error::InvalidTensor("tensor byte length overflow".into()))?;
-    let mut output = Vec::with_capacity(output_len);
-    for linear in 0..count as u64 {
-        let mut remainder = linear;
-        let mut source_element = 0u64;
-        for (&dimension, &stride) in meta.shape.iter().zip(&meta.stride).rev() {
-            let coordinate = remainder % dimension;
-            remainder /= dimension;
-            source_element = source_element
-                .checked_add(
-                    coordinate
-                        .checked_mul(stride)
-                        .ok_or_else(|| Error::InvalidTensor("strided offset overflow".into()))?,
-                )
-                .ok_or_else(|| Error::InvalidTensor("strided offset overflow".into()))?;
-        }
-        let start = usize::try_from(source_element)
-            .ok()
-            .and_then(|value| value.checked_mul(width))
-            .ok_or_else(|| Error::InvalidTensor("strided byte offset overflow".into()))?;
-        let end = start
-            .checked_add(width)
-            .ok_or_else(|| Error::InvalidTensor("strided byte offset overflow".into()))?;
-        output.extend_from_slice(source.get(start..end).ok_or_else(|| {
-            Error::InvalidTensor("strided view exceeds loaded storage span".into())
-        })?);
-    }
-    Ok(output)
-}
-
-fn gather_strided_into(meta: &TensorMeta, source: &[u8], output: &mut [u8]) -> Result<()> {
-    let width = meta.dtype.element_size();
-    let count = usize::try_from(meta.element_count()?)
-        .map_err(|_| Error::InvalidTensor("element count does not fit this platform".into()))?;
-    let expected = count
-        .checked_mul(width)
-        .ok_or_else(|| Error::InvalidTensor("tensor byte length overflow".into()))?;
-    if output.len() != expected {
-        return Err(Error::InvalidTensor(
-            "output buffer has the wrong length".into(),
-        ));
-    }
-    for linear in 0..count as u64 {
-        let mut remainder = linear;
-        let mut source_element = 0u64;
-        for (&dimension, &stride) in meta.shape.iter().zip(&meta.stride).rev() {
-            let coordinate = remainder % dimension;
-            remainder /= dimension;
-            source_element = source_element
-                .checked_add(
-                    coordinate
-                        .checked_mul(stride)
-                        .ok_or_else(|| Error::InvalidTensor("strided offset overflow".into()))?,
-                )
-                .ok_or_else(|| Error::InvalidTensor("strided offset overflow".into()))?;
-        }
-        let source_start = usize::try_from(source_element)
-            .ok()
-            .and_then(|value| value.checked_mul(width))
-            .ok_or_else(|| Error::InvalidTensor("strided byte offset overflow".into()))?;
-        let source_end = source_start
-            .checked_add(width)
-            .ok_or_else(|| Error::InvalidTensor("strided byte offset overflow".into()))?;
-        let output_start = linear as usize * width;
-        output[output_start..output_start + width].copy_from_slice(
-            source.get(source_start..source_end).ok_or_else(|| {
-                Error::InvalidTensor("strided view exceeds loaded storage span".into())
-            })?,
-        );
-    }
-    Ok(())
 }
 
 fn trim_ascii(mut bytes: &[u8]) -> &[u8] {

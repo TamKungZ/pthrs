@@ -1,6 +1,6 @@
 # PyTorch `.pth` format notes
 
-These notes record the subset reverse-engineered for PTHrs 0.2.0.
+These notes record the subset reverse-engineered for PTHrs.
 
 ## Container
 
@@ -64,3 +64,10 @@ Common inference checkpoints contain:
 - `version`: application architecture version such as `v1` or `v2`
 
 These remain generic `Value` data so callers can handle future variations.
+
+## Unknown classes
+
+Globals that are not tensor or storage reconstructors, such as
+`argparse.Namespace` in fairseq checkpoints, are never imported. `GLOBAL`,
+`REDUCE`, `NEWOBJ`, `INST`, and `OBJ` produce inert `Value::Reduce` nodes and
+`BUILD` state is discarded, so the surrounding state dictionary stays readable.

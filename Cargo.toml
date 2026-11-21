@@ -1,6 +1,6 @@
 [package]
 name = "pthrs"
-version = "0.2.0"
+version = "1.0.0"
 edition = "2021"
 rust-version = "1.74"
 authors = ["TamKungZ_ <dev@tamkungz.me>"]
