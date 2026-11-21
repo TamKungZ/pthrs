@@ -30,7 +30,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub(super) fn run(mut self) -> Result<(u8, Value)> {
+    pub(super) fn run(mut self) -> Result<(u8, Value, usize)> {
         loop {
             let opcode_at = self.at;
             let opcode = self.byte()?;
@@ -44,7 +44,7 @@ impl<'a> Parser<'a> {
                     {
                         return Err(Error::pickle(opcode_at, "unclosed MARK at STOP"));
                     }
-                    return Ok((self.protocol, value));
+                    return Ok((self.protocol, value, self.at));
                 }
                 0x80 => self.protocol = self.byte()?, // PROTO
                 0x95 => {

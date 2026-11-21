@@ -16,6 +16,11 @@ pub fn parse_pickle(bytes: &[u8]) -> Result<Value> {
 }
 
 pub(crate) fn parse_pickle_with_protocol(bytes: &[u8]) -> Result<(u8, Value)> {
+    parse_pickle_prefix(bytes).map(|(protocol, value, _)| (protocol, value))
+}
+
+/// Parses the first pickle in `bytes` and reports how many bytes it used.
+pub(crate) fn parse_pickle_prefix(bytes: &[u8]) -> Result<(u8, Value, usize)> {
     parser::Parser::new(bytes).run()
 }
 

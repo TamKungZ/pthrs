@@ -1,6 +1,9 @@
 use std::{collections::BTreeMap, slice};
 
-use crate::{pickle::parse_pickle_with_protocol, DType, Error, Result, TensorMeta, Value};
+use crate::{
+    pickle::{parse_pickle_prefix, parse_pickle_with_protocol},
+    DType, Error, Result, TensorMeta, Value,
+};
 
 /// Parsed, inert metadata from a PyTorch checkpoint.
 #[derive(Clone, Debug)]
@@ -22,6 +25,12 @@ impl Checkpoint {
     pub fn from_pickle(bytes: &[u8]) -> Result<Self> {
         let (protocol, root) = parse_pickle_with_protocol(bytes)?;
         Ok(Self { protocol, root })
+    }
+
+    /// Parses the first pickle in `bytes` and reports how many bytes it used.
+    pub(super) fn from_pickle_prefix(bytes: &[u8]) -> Result<(Self, usize)> {
+        let (protocol, root, used) = parse_pickle_prefix(bytes)?;
+        Ok((Self { protocol, root }, used))
     }
 
     pub fn pickle_protocol(&self) -> u8 {

@@ -1,5 +1,7 @@
 mod archive;
+mod legacy;
 mod metadata;
+mod storage;
 mod strided;
 
 pub use archive::PthArchive;

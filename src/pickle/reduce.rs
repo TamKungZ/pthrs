@@ -51,6 +51,12 @@ pub(super) fn persistent(id: Value, offset: usize) -> Result<Value> {
     if values.first().and_then(Value::as_str) != Some("storage") || values.len() < 5 {
         return Ok(Value::Persistent(Box::new(Value::Tuple(values))));
     }
+    if values.get(5).is_some_and(|view| *view != Value::None) {
+        return Err(Error::pickle(
+            offset,
+            "storage views in legacy checkpoints are not supported",
+        ));
+    }
     let (module, name) = match &values[1] {
         Value::Global { module, name } => (module.as_str(), name.as_str()),
         other => return Err(type_error(offset, "storage type global", other.kind())),
