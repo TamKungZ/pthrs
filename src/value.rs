@@ -5,6 +5,7 @@ use crate::{StorageRef, TensorMeta};
 /// Python callables are never imported or executed. Unknown reductions remain
 /// visible as [`Value::Reduce`] nodes for inspection.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum Value {
     None,
     Bool(bool),
@@ -72,6 +73,14 @@ impl Value {
     pub fn as_list(&self) -> Option<&[Value]> {
         match self {
             Self::List(value) => Some(value),
+            _ => None,
+        }
+    }
+
+    /// Items of a list or tuple.
+    pub fn as_sequence(&self) -> Option<&[Value]> {
+        match self {
+            Self::List(value) | Self::Tuple(value) => Some(value),
             _ => None,
         }
     }

@@ -5,6 +5,7 @@ pub enum ByteOrder {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[non_exhaustive]
 pub enum DType {
     Bool,
     U8,
