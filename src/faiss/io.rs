@@ -79,3 +79,25 @@ pub(super) fn read_f32<R: Read>(reader: &mut R) -> Result<f32> {
     reader.read_exact(&mut bytes)?;
     Ok(f32::from_le_bytes(bytes))
 }
+
+pub(super) fn ensure_available<R: Seek>(reader: &mut R, bytes: u64, file_len: u64) -> Result<()> {
+    let current = reader.stream_position()?;
+    match current.checked_add(bytes) {
+        Some(end) if end <= file_len => Ok(()),
+        _ => Err(Error::InvalidIndex("truncated index data".into())),
+    }
+}
+
+pub(super) fn read_i64_vec<R: Read>(reader: &mut R, len: usize) -> Result<Vec<i64>> {
+    let mut bytes = vec![
+        0;
+        len.checked_mul(8).ok_or_else(|| Error::InvalidIndex(
+            "ID vector byte length overflow".into()
+        ))?
+    ];
+    reader.read_exact(&mut bytes)?;
+    Ok(bytes
+        .chunks_exact(8)
+        .map(|bytes| i64::from_le_bytes(bytes.try_into().expect("eight bytes")))
+        .collect())
+}

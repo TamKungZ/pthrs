@@ -1,10 +1,11 @@
-use std::io::{Read, Seek};
+use std::io::{Read, Seek, SeekFrom};
 
 use crate::{Error, Result};
 
 use super::{
     io::{
-        checked_skip, magic_string, read_f32, read_i32, read_i64, read_magic, read_u8, read_usize64,
+        checked_skip, ensure_available, expect_magic, magic_string, read_f32, read_f32_vec,
+        read_i32, read_i64, read_magic, read_u8, read_usize64,
     },
     search::Metric,
 };
@@ -143,4 +144,150 @@ pub(super) fn read_list_sizes<R: Read>(reader: &mut R, nlist: usize) -> Result<V
         )));
     }
     Ok(sizes)
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct ListMeta {
+    pub(super) len: usize,
+    pub(super) codes_offset: u64,
+    pub(super) ids_offset: u64,
+}
+
+pub(super) struct IvfLayout {
+    pub(super) dimension: usize,
+    pub(super) total: u64,
+    pub(super) nlist: usize,
+    pub(super) default_nprobe: usize,
+    pub(super) metric: Metric,
+    pub(super) trained: bool,
+    pub(super) centroids: Vec<f32>,
+    pub(super) lists: Vec<ListMeta>,
+}
+
+/// Parses and validates an `IndexIVFFlat` file, recording where each list's
+/// vectors and IDs live without reading them.
+pub(super) fn read_ivf_flat_layout<R: Read + Seek>(reader: &mut R) -> Result<IvfLayout> {
+    let file_len = reader.seek(SeekFrom::End(0))?;
+    reader.seek(SeekFrom::Start(0))?;
+
+    expect_magic(reader, INDEX_IVF_FLAT, "IndexIVFFlat")?;
+    let header = read_index_header(reader)?;
+    validate_header(&header)?;
+    let dimension = header.dimension;
+
+    let nlist = read_usize64(reader, "nlist")?;
+    let default_nprobe = read_usize64(reader, "nprobe")?;
+    if nlist == 0 || nlist > MAX_LISTS {
+        return Err(Error::InvalidIndex(format!(
+            "nlist {nlist} is out of range"
+        )));
+    }
+    if default_nprobe == 0 {
+        return Err(Error::InvalidIndex("nprobe is zero".into()));
+    }
+
+    let quantizer_magic = read_magic(reader)?;
+    let quantizer_metric = match quantizer_magic {
+        INDEX_FLAT_L2 => Metric::L2,
+        INDEX_FLAT_IP => Metric::InnerProduct,
+        INDEX_FLAT_GENERIC => header.metric,
+        other => {
+            return Err(Error::InvalidIndex(format!(
+                "unsupported IVF quantizer {:?}",
+                magic_string(other)
+            )))
+        }
+    };
+    let quantizer = read_index_header(reader)?;
+    validate_header(&quantizer)?;
+    if quantizer.dimension != dimension {
+        return Err(Error::InvalidIndex(
+            "quantizer dimension differs from index".into(),
+        ));
+    }
+    if quantizer.total != nlist as u64 {
+        return Err(Error::InvalidIndex(format!(
+            "quantizer contains {} centroids, expected {nlist}",
+            quantizer.total
+        )));
+    }
+    if quantizer.metric != quantizer_metric || header.metric != quantizer_metric {
+        return Err(Error::InvalidIndex(
+            "quantizer and index metrics differ".into(),
+        ));
+    }
+    let centroid_count = read_usize64(reader, "quantizer vector length")?;
+    let expected_centroids = nlist
+        .checked_mul(dimension)
+        .ok_or_else(|| Error::InvalidIndex("centroid length overflow".into()))?;
+    if centroid_count != expected_centroids {
+        return Err(Error::InvalidIndex(format!(
+            "quantizer contains {centroid_count} values, expected {expected_centroids}"
+        )));
+    }
+    ensure_available(reader, centroid_count as u64 * 4, file_len)?;
+    let centroids = read_f32_vec(reader, centroid_count)?;
+
+    skip_direct_map(reader, file_len)?;
+    expect_magic(reader, ARRAY_INVERTED_LISTS, "ArrayInvertedLists")?;
+    let stored_nlist = read_usize64(reader, "inverted-list count")?;
+    let code_size = read_usize64(reader, "inverted-list code size")?;
+    if stored_nlist != nlist {
+        return Err(Error::InvalidIndex(
+            "inverted-list count differs from nlist".into(),
+        ));
+    }
+    let expected_code_size = dimension
+        .checked_mul(4)
+        .ok_or_else(|| Error::InvalidIndex("code size overflow".into()))?;
+    if code_size != expected_code_size {
+        return Err(Error::InvalidIndex(format!(
+            "code size is {code_size}, expected {expected_code_size}"
+        )));
+    }
+    let sizes = read_list_sizes(reader, nlist)?;
+    let listed_total = sizes.iter().try_fold(0u64, |total, &size| {
+        total
+            .checked_add(size as u64)
+            .ok_or_else(|| Error::InvalidIndex("inverted-list total overflow".into()))
+    })?;
+    if listed_total != header.total {
+        return Err(Error::InvalidIndex(format!(
+            "inverted lists contain {listed_total} vectors, header declares {}",
+            header.total
+        )));
+    }
+
+    let mut lists = Vec::with_capacity(nlist);
+    for len in sizes {
+        let codes_offset = reader.stream_position()?;
+        let code_bytes = len
+            .checked_mul(code_size)
+            .ok_or_else(|| Error::InvalidIndex("list code length overflow".into()))?;
+        checked_skip(reader, code_bytes as u64, file_len)?;
+        let ids_offset = reader.stream_position()?;
+        let id_bytes = len
+            .checked_mul(8)
+            .ok_or_else(|| Error::InvalidIndex("list ID length overflow".into()))?;
+        checked_skip(reader, id_bytes as u64, file_len)?;
+        lists.push(ListMeta {
+            len,
+            codes_offset,
+            ids_offset,
+        });
+    }
+    if reader.stream_position()? != file_len {
+        return Err(Error::InvalidIndex("unexpected trailing bytes".into()));
+    }
+
+    Ok(IvfLayout {
+        dimension,
+        total: header.total,
+        nlist,
+        default_nprobe,
+        metric: header.metric,
+        trained: header.trained,
+        centroids,
+        lists,
+    })
 }
