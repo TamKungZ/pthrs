@@ -27,4 +27,4 @@ pub use tensor::{
     ByteOrder, DType, F32Tensor, StorageRef, TensorData, TensorMeta, TensorReadBuffer, TensorView,
 };
 pub use value::Value;
-pub use voice::{ValidationReport, VoiceModelConfig, VoiceModelInfo};
+pub use voice::{ArchitectureVersion, ValidationReport, VoiceModelConfig, VoiceModelInfo};

@@ -1,4 +1,6 @@
-use crate::{Checkpoint, Error, Result, Value};
+use std::{fs::File, path::Path};
+
+use crate::{Checkpoint, Error, PthArchive, Result, Value};
 
 /// Named form of the positional generator configuration stored in common
 /// real-time voice-conversion checkpoints.
@@ -43,6 +45,42 @@ pub struct ValidationReport {
 impl ValidationReport {
     pub fn is_valid(&self) -> bool {
         self.errors.is_empty()
+    }
+
+    /// Fails with every error joined into one message; warnings are ignored.
+    pub fn into_result(self) -> Result<()> {
+        if self.errors.is_empty() {
+            Ok(())
+        } else {
+            Err(Error::InvalidArchive(self.errors.join("; ")))
+        }
+    }
+}
+
+/// Generator architecture generation, which fixes the phone feature width.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ArchitectureVersion {
+    V1,
+    V2,
+}
+
+impl ArchitectureVersion {
+    /// Width of the phone features the generator consumes and indexes store.
+    pub fn feature_dimension(self) -> usize {
+        match self {
+            Self::V1 => 256,
+            Self::V2 => 768,
+        }
+    }
+}
+
+impl PthArchive<File> {
+    /// Opens a voice-model checkpoint and fails unless it validates cleanly.
+    pub fn open_voice_model(path: impl AsRef<Path>) -> Result<(Self, VoiceModelInfo)> {
+        let archive = Self::open(path)?;
+        let info = archive.checkpoint().voice_model_info()?;
+        info.validate(archive.checkpoint()).into_result()?;
+        Ok((archive, info))
     }
 }
 
@@ -187,6 +225,21 @@ impl VoiceModelInfo {
         report
     }
 
+    /// Architecture generation from the `version` label, falling back to the
+    /// phone embedding width for checkpoints that omit it.
+    pub fn architecture(&self) -> Result<ArchitectureVersion> {
+        match (
+            self.architecture_version.as_deref(),
+            self.phone_feature_channels,
+        ) {
+            (Some("v1"), _) | (_, Some(256)) => Ok(ArchitectureVersion::V1),
+            (Some("v2"), _) | (_, Some(768)) => Ok(ArchitectureVersion::V2),
+            (label, channels) => Err(Error::InvalidArchive(format!(
+                "unsupported architecture {label:?} with {channels:?} phone channels"
+            ))),
+        }
+    }
+
     pub fn validate_index_dimension(&self, dimension: usize) -> Result<()> {
         let expected = self
             .phone_feature_channels
@@ -256,7 +309,62 @@ fn parse_rate_label(label: &str) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_rate_label;
+    use super::*;
+
+    fn info(version: Option<&str>, phone_channels: Option<u32>) -> VoiceModelInfo {
+        VoiceModelInfo {
+            config: VoiceModelConfig {
+                spectrogram_channels: 1025,
+                segment_size: 32,
+                intermediate_channels: 192,
+                hidden_channels: 192,
+                filter_channels: 768,
+                attention_heads: 2,
+                attention_layers: 6,
+                kernel_size: 3,
+                dropout: 0.0,
+                resblock: "1".into(),
+                resblock_kernel_sizes: vec![3, 7, 11],
+                resblock_dilation_sizes: vec![vec![1, 3, 5]; 3],
+                upsample_rates: vec![10, 10, 2, 2],
+                upsample_initial_channels: 512,
+                upsample_kernel_sizes: vec![16, 16, 4, 4],
+                speaker_count: 109,
+                speaker_embedding_channels: 256,
+                sample_rate: 40_000,
+            },
+            architecture_version: version.map(str::to_owned),
+            sample_rate_label: None,
+            pitch_guidance: true,
+            training_info: None,
+            phone_feature_channels: phone_channels,
+        }
+    }
+
+    #[test]
+    fn resolves_architecture_from_label_or_channels() {
+        assert_eq!(
+            info(Some("v2"), None).architecture().unwrap(),
+            ArchitectureVersion::V2
+        );
+        assert_eq!(
+            info(None, Some(256)).architecture().unwrap(),
+            ArchitectureVersion::V1
+        );
+        assert!(info(None, None).architecture().is_err());
+        assert_eq!(ArchitectureVersion::V2.feature_dimension(), 768);
+    }
+
+    #[test]
+    fn report_converts_errors_into_one_failure() {
+        let mut report = ValidationReport::default();
+        report.warnings.push("ignored".into());
+        assert!(report.clone().into_result().is_ok());
+        report.errors.push("first".into());
+        report.errors.push("second".into());
+        let message = report.into_result().unwrap_err().to_string();
+        assert!(message.contains("first; second"));
+    }
 
     #[test]
     fn parses_sample_rate_labels() {
