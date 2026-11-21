@@ -25,9 +25,13 @@ fn main() -> Result<()> {
 }
 ```
 
-Use `load_all_tensors` for raw bytes or `load_all_f32` for `f32` weights.
-Reuse a `TensorReadBuffer` with `read_tensor_into` or `read_tensor_f32_into`
-to avoid repeated allocation.
+`PthArchive::open_voice_model` opens and validates in one call, and
+`ArchitectureVersion` gives the v1 or v2 feature width. Use `load_all_tensors`
+for raw bytes, `load_all_f32` for `f32` weights, or `load_floating_f32` to
+skip integer entries such as `num_batches_tracked`. `F32Tensor::into_shape_and_values`
+yields a `usize` shape and values for building tensors. Reuse a
+`TensorReadBuffer` with `read_tensor_into` or `read_tensor_f32_into` to avoid
+repeated allocation.
 
 ## Retrieval indexes
 
@@ -55,7 +59,8 @@ fn main() -> Result<()> {
 }
 ```
 
-Create the index and workspace once at startup. Search does not allocate while
+`blend_frames` applies the blend to every row-major frame in a buffer. Create
+the index and workspace once at startup. Search does not allocate while
 `k` fits the workspace. `LoadedIvfFlatIndex` is `Send + Sync`, so share one
 index and give each thread its own workspace.
 

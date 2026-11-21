@@ -8,6 +8,11 @@ All notable changes to PTHrs will be documented in this file.
   Public API and decoding behavior are unchanged.
 - Add `TensorMeta::shape_usize`, `DType::is_floating_point`, and
   `Checkpoint::tensors_with_dtype`.
+- Add `PthArchive::open_voice_model`, `VoiceModelInfo::architecture`,
+  `ArchitectureVersion`, and `ValidationReport::into_result`.
+- Add `PthArchive::load_f32_where`, `PthArchive::load_floating_f32`, and
+  `F32Tensor::into_shape_and_values`.
+- Add `LoadedIvfFlatIndex::blend_frames` for whole-buffer retrieval blending.
 - Read pickles that contain `INST` and `OBJ` class instances as inert values.
 
 ## 0.2.0 - 2026-08-15
