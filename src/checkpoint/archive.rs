@@ -254,6 +254,30 @@ impl<R: Read + Seek> PthArchive<R> {
         Ok(tensors)
     }
 
+    /// Loads and converts the state-dictionary tensors accepted by `keep`.
+    pub fn load_f32_where(
+        &mut self,
+        mut keep: impl FnMut(&str, &TensorMeta) -> bool,
+    ) -> Result<BTreeMap<String, F32Tensor>> {
+        let names: Vec<String> = self
+            .checkpoint
+            .tensors()
+            .filter(|(name, meta)| keep(name, meta))
+            .map(|(name, _)| name.to_owned())
+            .collect();
+        let mut tensors = BTreeMap::new();
+        for name in names {
+            tensors.insert(name.clone(), self.read_tensor_f32(&name)?);
+        }
+        Ok(tensors)
+    }
+
+    /// Loads every floating-point tensor as `f32`, skipping integer entries
+    /// such as batch-norm `num_batches_tracked` counters.
+    pub fn load_floating_f32(&mut self) -> Result<BTreeMap<String, F32Tensor>> {
+        self.load_f32_where(|_, meta| meta.dtype.is_floating_point())
+    }
+
     pub fn load_all_tensors(&mut self) -> Result<BTreeMap<String, TensorData>> {
         let names: Vec<String> = self.checkpoint.tensor_names().map(str::to_owned).collect();
         let mut tensors = BTreeMap::new();
