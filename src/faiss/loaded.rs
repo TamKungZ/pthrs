@@ -56,7 +56,45 @@ impl LoadedIvfFlatIndex {
     /// Creates a workspace sized so loaded-index search performs no heap
     /// allocation while `k` does not exceed `max_neighbors`.
     pub fn workspace(&self, max_neighbors: usize) -> SearchWorkspace {
-        SearchWorkspace::with_capacity(self.nlist, max_neighbors)
+        let mut workspace = SearchWorkspace::with_capacity(self.nlist, max_neighbors);
+        workspace.blend_output.reserve(self.dimension);
+        workspace
+    }
+
+    /// Replaces every row-major feature frame in `features` with its
+    /// retrieval blend and returns the total neighbors used. Allocation-free
+    /// when `workspace` came from [`Self::workspace`].
+    pub fn blend_frames(
+        &self,
+        features: &mut [f32],
+        options: SearchOptions,
+        rate: f32,
+        workspace: &mut SearchWorkspace,
+    ) -> Result<usize> {
+        if features.is_empty() || features.len() % self.dimension != 0 {
+            return Err(Error::DimensionMismatch {
+                expected: self.dimension,
+                found: features.len(),
+            });
+        }
+        let mut scratch = std::mem::take(&mut workspace.blend_output);
+        scratch.resize(self.dimension, 0.0);
+        let mut used = 0;
+        let mut result = Ok(());
+        for frame in features.chunks_exact_mut(self.dimension) {
+            match self.search_and_blend(frame, &mut scratch, options, rate, workspace) {
+                Ok(count) => {
+                    used += count;
+                    frame.copy_from_slice(&scratch);
+                }
+                Err(error) => {
+                    result = Err(error);
+                    break;
+                }
+            }
+        }
+        workspace.blend_output = scratch;
+        result.map(|()| used)
     }
 
     pub fn search(&self, query: &[f32], k: usize) -> Result<Vec<Neighbor>> {

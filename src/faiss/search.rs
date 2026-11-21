@@ -34,6 +34,7 @@ pub struct SearchWorkspace {
     pub(super) code_bytes: Vec<u8>,
     pub(super) id_bytes: Vec<u8>,
     pub(super) neighbors: Vec<Neighbor>,
+    pub(super) blend_output: Vec<f32>,
 }
 
 impl SearchWorkspace {
@@ -47,6 +48,7 @@ impl SearchWorkspace {
             code_bytes: Vec::new(),
             id_bytes: Vec::new(),
             neighbors: Vec::with_capacity(neighbors),
+            blend_output: Vec::new(),
         }
     }
 

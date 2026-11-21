@@ -115,3 +115,32 @@ fn i64v(out: &mut Vec<u8>, value: i64) {
 fn f32v(out: &mut Vec<u8>, value: f32) {
     out.extend_from_slice(&value.to_le_bytes());
 }
+
+#[test]
+fn blends_each_frame_like_single_search() {
+    let index = FaissIvfFlatIndex::from_reader(Cursor::new(fixture_index()))
+        .unwrap()
+        .load()
+        .unwrap();
+    let options = SearchOptions { k: 2, nprobe: 1 };
+    let mut workspace = index.workspace(2);
+    let mut features = [1.0, 0.5, 0.0, 1.5];
+    let mut expected = features;
+    for frame in expected.chunks_exact_mut(2) {
+        let query = frame.to_vec();
+        index
+            .search_and_blend(&query, frame, options, 0.5, &mut workspace)
+            .unwrap();
+    }
+
+    let used = index
+        .blend_frames(&mut features, options, 0.5, &mut workspace)
+        .unwrap();
+
+    assert_eq!(used, 4);
+    assert_eq!(features, expected);
+    assert!(matches!(
+        index.blend_frames(&mut [1.0, 2.0, 3.0], options, 0.5, &mut workspace),
+        Err(Error::DimensionMismatch { .. })
+    ));
+}
