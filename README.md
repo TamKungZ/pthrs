@@ -1,11 +1,12 @@
 # PTHrs
 
-Pure-Rust readers for ZIP-based PyTorch `.pth` checkpoints and FAISS
+Pure-Rust readers for PyTorch `.pth` checkpoints and FAISS
 `IndexIVFFlat` files. No dependencies, and no Python, PyTorch, or FAISS needed.
 
 ## Checkpoints
 
-Reads `torch.save` archives (ZIP and ZIP64) without executing any Python code.
+Reads `torch.save` archives (ZIP and ZIP64 with stored or deflated entries,
+plus the older single-stream layout) without executing any Python code.
 Tensors load lazily or in bulk, as raw bytes or `f32`, with contiguous and
 strided views. Voice-model configs can be read and validated.
 
@@ -74,7 +75,8 @@ pthrs-index-inspect model.index --query-id 0 --k 8 --nprobe 1
 
 ## Limits
 
-- Legacy pre-ZIP serialization and compressed entries are not supported.
+- ZIP entries compressed with anything other than deflate are not supported.
+- Legacy single-stream files with storage views are not supported.
 - Sparse and quantized tensors are not supported.
 - Only little-endian 64-bit FAISS `IndexIVFFlat` files are read.
 

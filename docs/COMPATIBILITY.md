@@ -30,3 +30,29 @@ applies.
 [`Politrees/RVC_resources`](https://huggingface.co/Politrees/RVC_resources/tree/0a6a139743218159776d021418d96dd57c128c8a/pretrained/v1/48k)
 loads all 606 tensors. It has no exported `config` field, so
 `voice_model_info()` rejects it as expected.
+
+## Other checkpoints
+
+Loaded and decoded to `f32` with no parse errors:
+
+| File | Tensors | Elements | Type |
+| --- | ---: | ---: | --- |
+| fairseq `hubert_base.pt` | 214 | 94,697,600 | F16 |
+| `rmvpe_20231006.pt` | 741 | 90,472,917 | F16 |
+| `fcpe_c_v001.pt` | 73 | 10,832,953 | F32 |
+
+The `cfg` object in `hubert_base.pt` holds an `argparse.Namespace`, which is
+kept as an inert value. In `rmvpe_20231006.pt` the `num_batches_tracked`
+counters are stored as F16 and decode to infinity, so consumers should still
+skip them by name.
+
+## Coverage
+
+Real files above cover stored ZIP checkpoints, v1 and v2 RVC models, and
+full-layout L2 indexes. A real model recompressed with deflate decoded to the
+same tensors as the original.
+
+These paths are tested only with generated fixtures: ZIP64, big-endian data,
+the legacy single-stream layout, sparse list layout, inner-product indexes,
+direct maps, strided tensors, and integer and wide dtypes. No real file of
+those kinds has been available.

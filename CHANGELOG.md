@@ -29,6 +29,9 @@ All notable changes to PTHrs will be documented in this file.
   strings.
 - Add `Value::as_sequence`.
 - Drop the redundant `[lib]`, `[[bin]]`, and `[features]` tables.
+- Read ZIP entries compressed with deflate through a built-in decoder.
+- Read the older single-stream `.pth` layout.
+- Add `DType::U16`, `DType::U32`, and `DType::U64`.
 - Read pickles that contain `INST` and `OBJ` class instances as inert values.
 
 ## 0.2.0 - 2026-08-15

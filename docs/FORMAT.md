@@ -16,6 +16,15 @@ Modern checkpoints are ZIP archives sharing one generated prefix:
 Each `data/<id>` entry is a raw typed storage array, normally stored without
 compression.
 
+Entries may be stored or deflated. A deflated entry is decoded whole when any
+part of it is read, so PyTorch's own uncompressed layout is much cheaper to
+load.
+
+Files from before the ZIP layout start with a pickled magic number. They hold
+the protocol version, system info (including byte order), the object pickle,
+the sorted storage keys, and then each storage as an element count followed by
+its data. Offsets are found by walking the storages in key order, so every
+storage reachable from the object pickle must be known to read past it.
 ## Pickle
 
 Tensors use `torch._utils._rebuild_tensor_v2` with arguments
