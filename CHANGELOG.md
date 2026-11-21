@@ -9,6 +9,7 @@ All notable changes to PTHrs will be documented in this file.
 - Add `TensorMeta::shape_usize`, `DType::is_floating_point`, and
   `Checkpoint::tensors_with_dtype`.
 - Read pickles that contain `INST` and `OBJ` class instances as inert values.
+
 ## 0.2.0 - 2026-08-15
 
 - Add a pure-Rust FAISS `IndexIVFFlat` reader.
