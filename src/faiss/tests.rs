@@ -74,40 +74,96 @@ fn fixture_index() -> Vec<u8> {
 }
 
 fn fixture_index_with_ids(ids: [i64; 2]) -> Vec<u8> {
-    let mut out = Vec::new();
-    out.extend_from_slice(b"IwFl");
-    header(&mut out, 2, 2);
-    u64v(&mut out, 1); // nlist
-    u64v(&mut out, 1); // nprobe
-    out.extend_from_slice(b"IxF2");
-    header(&mut out, 2, 1);
-    u64v(&mut out, 2); // centroid float count
-    f32v(&mut out, 0.0);
-    f32v(&mut out, 0.0);
-    out.push(0); // DirectMap::NoMap
-    u64v(&mut out, 0); // empty direct-map array
-    out.extend_from_slice(b"ilar");
-    u64v(&mut out, 1); // nlist
-    u64v(&mut out, 8); // code size: 2 * f32
-    out.extend_from_slice(b"full");
-    u64v(&mut out, 1); // size vector length
-    u64v(&mut out, 2); // list size
-    f32v(&mut out, 1.0);
-    f32v(&mut out, 0.0);
-    f32v(&mut out, 0.0);
-    f32v(&mut out, 2.0);
-    i64v(&mut out, ids[0]);
-    i64v(&mut out, ids[1]);
-    out
+    IndexSpec {
+        ids,
+        ..IndexSpec::default()
+    }
+    .build()
+}
+
+struct IndexSpec {
+    ids: [i64; 2],
+    metric: i32,
+    quantizer: [u8; 4],
+    sparse_lists: bool,
+    direct_map: u8,
+}
+
+impl Default for IndexSpec {
+    fn default() -> Self {
+        Self {
+            ids: [7, 9],
+            metric: 1,
+            quantizer: *b"IxF2",
+            sparse_lists: false,
+            direct_map: 0,
+        }
+    }
+}
+
+impl IndexSpec {
+    fn build(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(b"IwFl");
+        header_with_metric(&mut out, 2, 2, self.metric);
+        u64v(&mut out, 1); // nlist
+        u64v(&mut out, 1); // nprobe
+        out.extend_from_slice(&self.quantizer);
+        header_with_metric(&mut out, 2, 1, self.metric);
+        u64v(&mut out, 2); // centroid float count
+        f32v(&mut out, 0.0);
+        f32v(&mut out, 0.0);
+        out.push(self.direct_map);
+        match self.direct_map {
+            1 => {
+                u64v(&mut out, 2);
+                i64v(&mut out, 0);
+                i64v(&mut out, 1);
+            }
+            2 => {
+                u64v(&mut out, 0);
+                u64v(&mut out, 2);
+                for pair in [(7, 0), (9, 1)] {
+                    i64v(&mut out, pair.0);
+                    i64v(&mut out, pair.1);
+                }
+            }
+            _ => u64v(&mut out, 0),
+        }
+        out.extend_from_slice(b"ilar");
+        u64v(&mut out, 1); // nlist
+        u64v(&mut out, 8); // code size: 2 * f32
+        if self.sparse_lists {
+            out.extend_from_slice(b"sprs");
+            u64v(&mut out, 2); // one (list, size) pair
+            u64v(&mut out, 0);
+            u64v(&mut out, 2);
+        } else {
+            out.extend_from_slice(b"full");
+            u64v(&mut out, 1); // size vector length
+            u64v(&mut out, 2); // list size
+        }
+        f32v(&mut out, 1.0);
+        f32v(&mut out, 0.0);
+        f32v(&mut out, 0.0);
+        f32v(&mut out, 2.0);
+        i64v(&mut out, self.ids[0]);
+        i64v(&mut out, self.ids[1]);
+        out
+    }
 }
 
 fn header(out: &mut Vec<u8>, dimension: i32, total: i64) {
+    header_with_metric(out, dimension, total, 1);
+}
+
+fn header_with_metric(out: &mut Vec<u8>, dimension: i32, total: i64, metric: i32) {
     out.extend_from_slice(&dimension.to_le_bytes());
     i64v(out, total);
     i64v(out, 1 << 20);
     i64v(out, 1 << 20);
     out.push(1);
-    out.extend_from_slice(&1i32.to_le_bytes()); // L2
+    out.extend_from_slice(&metric.to_le_bytes());
 }
 
 fn u64v(out: &mut Vec<u8>, value: u64) {
@@ -194,4 +250,80 @@ fn rejects_centroid_block_larger_than_file() {
         FaissIvfFlatIndex::from_reader(Cursor::new(out)),
         Err(Error::InvalidIndex(_))
     ));
+}
+
+#[test]
+fn reads_sparse_list_layout() {
+    let spec = IndexSpec {
+        sparse_lists: true,
+        ..IndexSpec::default()
+    };
+    let mut sparse = FaissIvfFlatIndex::from_reader(Cursor::new(spec.build())).unwrap();
+    let mut full = FaissIvfFlatIndex::from_reader(Cursor::new(fixture_index())).unwrap();
+    assert_eq!(
+        sparse.search(&[1.0, 0.0], 2).unwrap(),
+        full.search(&[1.0, 0.0], 2).unwrap()
+    );
+}
+
+#[test]
+fn reads_direct_maps_and_generic_quantizer() {
+    for spec in [
+        IndexSpec {
+            direct_map: 1,
+            ..IndexSpec::default()
+        },
+        IndexSpec {
+            direct_map: 2,
+            ..IndexSpec::default()
+        },
+        IndexSpec {
+            quantizer: *b"IxFl",
+            ..IndexSpec::default()
+        },
+    ] {
+        let mut index = FaissIvfFlatIndex::from_reader(Cursor::new(spec.build())).unwrap();
+        assert_eq!(index.search(&[1.0, 0.0], 1).unwrap()[0].id, 7);
+    }
+}
+
+#[test]
+fn ranks_inner_product_by_similarity() {
+    let spec = IndexSpec {
+        metric: 0,
+        quantizer: *b"IxFI",
+        ..IndexSpec::default()
+    };
+    let index = FaissIvfFlatIndex::from_reader(Cursor::new(spec.build()))
+        .unwrap()
+        .load()
+        .unwrap();
+    assert_eq!(index.metric(), Metric::InnerProduct);
+
+    let found = index.search(&[0.0, 1.0], 2).unwrap();
+    assert_eq!(
+        found[0],
+        Neighbor {
+            id: 9,
+            distance: 2.0
+        }
+    );
+    assert_eq!(
+        found[1],
+        Neighbor {
+            id: 7,
+            distance: 0.0
+        }
+    );
+
+    let mut workspace = index.workspace(2);
+    assert!(index
+        .search_and_blend(
+            &[0.0, 1.0],
+            &mut [0.0; 2],
+            SearchOptions::default(),
+            0.5,
+            &mut workspace
+        )
+        .is_err());
 }
