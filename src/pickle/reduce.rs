@@ -1,10 +1,10 @@
 use crate::{DType, Error, Result, StorageRef, TensorMeta, Value};
 
-use super::literal::type_error;
+use super::literal::{map_insert, type_error};
 
 pub(super) fn reduce(callable: Value, args: Value, offset: usize) -> Result<Value> {
     if global_is(&callable, "collections", "OrderedDict") {
-        return Ok(Value::Map(Vec::new()));
+        return ordered_dict(args);
     }
     if global_is(&callable, "torch._utils", "_rebuild_tensor_v2")
         || global_is(&callable, "torch._utils", "_rebuild_tensor")
@@ -22,6 +22,25 @@ pub(super) fn reduce(callable: Value, args: Value, offset: usize) -> Result<Valu
         callable: Box::new(callable),
         args: Box::new(args),
     })
+}
+
+/// Older pickles pass the items to `OrderedDict` as one list of pairs instead
+/// of filling the dictionary afterwards.
+fn ordered_dict(args: Value) -> Result<Value> {
+    let mut entries = Vec::new();
+    if let Value::Tuple(arguments) = &args {
+        if let [Value::List(items)] = arguments.as_slice() {
+            for item in items {
+                match item {
+                    Value::Tuple(pair) if pair.len() == 2 => {
+                        map_insert(&mut entries, pair[0].clone(), pair[1].clone())?;
+                    }
+                    _ => return Ok(Value::Map(Vec::new())),
+                }
+            }
+        }
+    }
+    Ok(Value::Map(entries))
 }
 
 pub(super) fn persistent(id: Value, offset: usize) -> Result<Value> {
